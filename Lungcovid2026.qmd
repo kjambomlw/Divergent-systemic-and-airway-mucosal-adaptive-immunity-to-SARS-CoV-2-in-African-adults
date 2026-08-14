@@ -1,0 +1,2197 @@
+---
+title: "Divergent systemic and airway mucosal adaptive immunity to SARS-CoV-2 in African adults"
+author: "Gloria Kapira and Kondwani Jambo"
+date: "`r Sys.Date()`"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-float: true
+    code-fold: true
+    theme: cosmo
+    self-contained: true
+    fig-width: 12
+    fig-height: 10
+execute:
+  echo: false
+  warning: false
+  message: false
+  cache: true
+  fig-show: hide
+---
+
+```{r}
+#Load packages
+pacman::p_load(
+  ggplot2,dplyr,readr,ggpubr,purrr,viridis,scales,readxl,janitor,rstatix,patchwork,forcats,umap,ggrepel,stringr,tidyr,patchwork, ggh4x, Hmisc, purrr, broom, tidyverse, knitr, gt, gtsummary,flextable,lubridate,magick,grid
+  )
+```
+
+```{r}
+#Load data
+icloud_path <- "~/Library/Mobile Documents/com~apple~CloudDocs/Rprojects"
+if (!dir.exists(icloud_path)) {
+  dir.create(icloud_path, recursive = TRUE)  
+}
+
+setwd(icloud_path)
+
+#Dataset 1
+lungcovid <- read_csv("merged_data_lungcovid.csv")
+num_cols <- sapply(lungcovid, is.numeric)
+lungcovid[num_cols] <- lapply(lungcovid[num_cols], 
+                                 function(x) replace(x, x < 0, 1))
+lungcovid <- lungcovid |>
+  mutate(
+    Vacc_Status = as.factor(Vacc_Status),
+    HIV_Status  = as.factor(HIV_Status),
+    Antigens    = as.factor(Antigens)
+  )
+
+lungcovid_corrected <- lungcovid %>%
+  mutate(
+    across(
+      matches("IgA.*Log") & !contains("Nasosorption"),
+      ~ . - 1
+    ),
+    HIV_Status = if_else(Sample_ID == "DEI110", "HIV+", HIV_Status)
+  )
+
+write_csv(lungcovid_corrected, "lungcovid04032026.csv")
+alldf <- read_csv("lungcovid04032026.csv")
+
+
+#Dataset 2
+IgAIgGWHO_long <- read_csv("bindingAbdata.csv") %>%
+  mutate(
+  Log10_Value = if_else(Isotype == "IgA", Log10_Value - 1, Log10_Value),
+  HIV_Status = case_when(
+    Sample_ID == "DEI110" ~ "HIV+",
+    TRUE ~ HIV_Status
+  )
+)
+
+write_csv(IgAIgGWHO_long, "bindingAbdata04032026.csv")
+
+
+#Dataset 3
+demographics<- read_csv("Lung COVID metadata 4.1.csv")
+
+
+newdf1 <- read_csv("Fig4B_data.csv")
+newdf2 <- read_csv("Fig2C_data.csv")
+newdf3 <- read_csv("Fig2B_data.csv")
+
+merged_ids <- bind_rows(
+  newdf1 %>%
+    transmute(
+      PID = PID,
+      HIV_status = HIV_status
+    ),
+  newdf3 %>%
+    transmute(
+      PID = Sample_ID,
+      HIV_status = HIV_Status
+    )
+) %>%
+  mutate(
+    PID = stringr::str_replace_all(PID, "\\s+", ""),
+    HIV_status = stringr::str_trim(HIV_status)
+  ) %>%
+  distinct(PID, .keep_all = TRUE)
+
+write_csv(merged_ids, "merged_PID_HIVstatus2.csv")
+
+
+# Custom color-blind friendly palettes
+vacc_palette <- c(
+  "Vaccinated"   = "#8da0cb",   # blue
+  "Unvaccinated" = "#e78ac3"    # pink/purple
+)
+
+hiv_palette <- c(
+  "HIV-" = "#66c2a5",  # greenish
+  "HIV+" = "#fc8d62"   # orange
+)
+
+```
+
+```{r}
+#| label: tbl-descriptives
+#| tbl-cap: "Participant demographic and clinical characteristics."
+#| 
+# ---- Clean and recode ----
+demographics <- demographics %>%
+  rename(
+    `Absolute CD4` = `Absolute CD4 cell count, median (IQR)(cells/µl)`,
+    `HIV viral load` = `HIV viral load  (copies/ml)`
+  ) %>%
+  mutate(
+    `HIV status` = case_when(
+      str_trim(`HIV status`) == "HIV -"   ~ "HIV-uninfected",
+      str_trim(`HIV status`) == "HIV >1Y" ~ "PLHIV ART>1yr",
+      str_trim(`HIV status`) == "HIV <1W" ~ NA_character_,
+      TRUE ~ NA_character_
+    ),
+    `Last vaccination date` = dmy(`Last vaccination date`),
+    `Enrollment date` = dmy(`Enrollment date`),
+    `Time since last vaccination (months)` =
+      interval(`Last vaccination date`, `Enrollment date`) %/% months(1),
+    VL_numeric = suppressWarnings(as.numeric(`HIV viral load`)),
+    `HIV viral load` = case_when(
+      `HIV status` == "HIV-uninfected" ~ NA_character_,
+      grepl("<40", `HIV viral load`) ~ "Not Detected",
+      !is.na(VL_numeric) & VL_numeric > 40 ~ "Detected",
+      str_detect(`HIV viral load`, regex("not", ignore_case = TRUE)) ~ "Not Detected",
+      TRUE ~ "Detected"
+    ),
+    `Absolute CD4` = if_else(
+      `HIV status` == "HIV-uninfected",
+      NA_real_,
+      `Absolute CD4`
+    )
+  ) %>%
+  select(-VL_numeric) %>%
+  filter(!is.na(`HIV status`)) %>%
+  mutate(
+    Sex = factor(recode(Sex, "F" = "Female", "M" = "Male")),
+    `Vaccination status` = factor(`Vaccination status`),
+    `Number of doses` = factor(`Number of doses`),
+    `Primary vaccine type (Dose 1)` = factor(`Primary vaccine type (Dose 1)`),
+    `Primary vaccine type (Dose 2)` = factor(`Primary vaccine type (Dose 2)`),
+    `HIV status` = factor(
+      `HIV status`,
+      levels = c("HIV-uninfected", "PLHIV ART>1yr")
+    ),
+    `HIV viral load` = factor(
+      `HIV viral load`,
+      levels = c("Not Detected", "Detected")
+    )
+  )
+
+Table1_final <- demographics %>%
+  select(
+    `HIV status`,
+    Age,
+    Sex,
+    `Vaccination status`,
+    `Number of doses`,
+    `Primary vaccine type (Dose 1)`,
+    `Primary vaccine type (Dose 2)`,
+    `Time since last vaccination (months)`,
+    `Absolute CD4`,
+    `HIV viral load`
+  ) %>%
+  tbl_summary(
+    by = `HIV status`,
+    type = list(
+      `HIV viral load` ~ "categorical"
+    ),
+    statistic = list(
+      all_continuous() ~ "{median} ({p25}, {p75})",
+      all_categorical() ~ "{n} ({p}%)"
+    ),
+    percent = "column",
+    digits = list(all_categorical() ~ 0),
+    missing = "no",
+    label = list(
+      Age ~ "Age (years)",
+      Sex ~ "Sex",
+      `Vaccination status` ~ "Vaccination status",
+      `Number of doses` ~ "Number of doses",
+      `Primary vaccine type (Dose 1)` ~ "Primary vaccine type (Dose 1)",
+      `Primary vaccine type (Dose 2)` ~ "Primary vaccine type (Dose 2)",
+      `Time since last vaccination (months)` ~
+        "Time since last COVID-19 vaccination (months)",
+      `Absolute CD4` ~ "Absolute CD4 cell count (cells/µL)",
+      `HIV viral load` ~ "HIV viral load"
+    )
+  ) %>%
+  add_p(
+    include = c(
+      Age,
+      Sex,
+      `Vaccination status`,
+      `Number of doses`,
+      `Primary vaccine type (Dose 1)`,
+      `Primary vaccine type (Dose 2)`,
+      `Time since last vaccination (months)`
+    ),
+    test = list(
+      Age ~ "wilcox.test",
+      `Time since last vaccination (months)` ~ "wilcox.test",
+      Sex ~ "fisher.test",
+      `Vaccination status` ~ "chisq.test",
+      `Number of doses` ~ "chisq.test",
+      `Primary vaccine type (Dose 1)` ~ "fisher.test",
+      `Primary vaccine type (Dose 2)` ~ "fisher.test"
+    ),
+    test.args = all_tests("wilcox.test") ~ list(exact = FALSE),
+    pvalue_fun = ~ style_pvalue(.x, digits = 3)
+  ) %>%
+  modify_table_body(
+    ~ .x %>%
+      mutate(
+        p.value = ifelse(
+          label %in% c("Absolute CD4 cell count (cells/µL)", "HIV viral load"),
+          NA_real_,
+          p.value
+        )
+      )
+  ) %>%
+  bold_labels() %>%
+  modify_header(label = "**Characteristic**")
+
+Table1_gt <- Table1_final %>%
+  as_gt() %>%
+  tab_options(
+    table.font.size = 12,
+    data_row.padding = px(4)
+  )
+
+Table1_gt
+
+```
+
+# **Cohort characteristics and sampling**
+
+We recruited 91 adults in Blantyre, Malawi, comprising 45 HIV-uninfected adults and 46 people with HIV (PWH) on more than 1 year on ART (Fig. 1a). Nasal lining fluid (NLF), bronchoalveolar lavage (BAL) fluid, and peripheral blood were collected from all participants. Baseline characteristics, including median age and sex distribution, were different between the study groups (Table 1), with the PWH group being older (median 29 vs 40, p\<0.001) and predominantly female (49% vs 74%, p=0.018). The Median peripheral CD4⁺ T cell counts was 580 cells/μl (IQR 450–697) in ART-treated PWH. Detectable plasma viral load was observed in 15% (7/46) of ART-treated PWH. Thirty-three per cent (15/45) of the HIV-uninfected adults were COVID-19 vaccinated, compared to 54% (25/46) of the ART-treated PWH. The time since last COVID-19 vaccination was similar between the two study groups (32 months vs 33 months, p=0.944). Thirty-three per cent (5/15) of the vaccinated HIV-uninfected adults received at least 2 doses, compared to 64% (16/25) in the ART-treated PWH group.
+
+# **Systemic Spike IgG responses align more closely with the lower than the upper respiratory tract**
+
+SARS-CoV-2 infection induces both systemic and mucosal antibodies; however, the extent to which immune responses are coordinated across respiratory compartments remains unclear. To address this, we quantified SARS-CoV-2–specific IgG and IgA antibodies in paired serum, NLF, and BAL samples from unvaccinated HIV-uninfected adults. To assess functional antibody activity, we measured Spike–ACE2 binding inhibition. We also examined the relationship between antibody responses across and within compartments.
+
+```{r}
+#Figure 1A
+wt_data <- IgAIgGWHO_long %>%
+  filter(HIV_Status == "HIV-",
+         Antigens %in% c("Nucleocapsid","Wildtype","RBD")) %>%
+  mutate(Compartment=factor(Compartment, levels=c("Serum","BAL","NLF")))
+
+pvals <- wt_data %>%
+  group_by(Compartment,Antigens) %>%
+  wilcox_test(Log10_Value~Isotype, paired=TRUE) %>%
+  add_xy_position(x="Isotype") %>%
+  mutate(p_label=ifelse(p<0.001,"p < 0.001",sprintf("p = %.3f",p)))
+
+igg_line <- data.frame(
+  Antigens = "Nucleocapsid",
+  Compartment = factor("Serum", levels = c("Serum", "BAL", "NLF")),
+  yintercept = 1
+)
+
+Fig1A <- ggplot(wt_data, aes(Isotype, Log10_Value, fill=Isotype)) +
+  geom_boxplot(alpha=.85, outlier.shape=NA) +
+  geom_jitter(width=.2, alpha=.5, color="black", size=1.5) +
+    geom_hline(
+    data = igg_line,
+    aes(yintercept = yintercept),
+    inherit.aes = FALSE,
+    colour = "#d95f02",
+    linetype = "dotted",
+    linewidth = 1
+  ) +
+  facet_grid(Antigens~Compartment, labeller=labeller(
+    Antigens=c(
+      "Wildtype"="WT Spike",
+      "Nucleocapsid"="WT Nucleocapsid"
+    ),
+    Compartment=label_value
+  )) +
+  stat_pvalue_manual(pvals, label="p_label", tip.length=0, size=6) +
+  labs(x="Isotype", y="Log10 Antibody Concentrations (WHO BAU/ml)", title="A.") +
+  scale_fill_manual(values=c("IgA"="#1b9e77","IgG"="#d95f02")) +
+  scale_y_continuous(breaks=0:5, limits=c(0,5), expand=expansion(mult=c(0,0.05))) +
+  theme_minimal(base_size=14) +
+  theme(plot.title=element_text(size=20, face="bold", hjust=0),
+        plot.title.position="plot",
+        strip.text=element_text(face="bold", size=18),
+        axis.title=element_text(face="bold", size=18),
+        axis.text=element_text(size=18),
+        panel.background=element_rect(fill="white", colour="black"),
+        panel.grid.major=element_line(color="grey70", linewidth=.1),
+        panel.grid.minor=element_line(color="grey85", linewidth=.08),
+        legend.position="none")
+
+plot_data <- wt_data %>%
+  select(Sample_ID, Antigens, Compartment, Isotype, Log10_Value, HIV_Status)
+write_csv(plot_data, "Fig1A_data.csv")
+
+
+#Figure 1B
+
+antigen_order <- c("Wildtype","Alpha","Beta","Gamma","Delta","Omicron")
+
+# Colour-blind friendly palette (Okabe–Ito)
+cb_pal <- c(
+  "Wildtype" = "#000000",
+  "Alpha"    = "#E69F00",
+  "Beta"     = "#56B4E9",
+  "Gamma"    = "#009E73",
+  "Delta"    = "#0072B2",
+  "Omicron"  = "#D55E00"
+)
+
+df_plot <- alldf %>%
+  select(Sample_ID, Antigens, Vacc_Status, HIV_Status,
+         IgALogNasosorption, IgALogSerum, IgALogBAL,
+         IgGLogNasosorption, IgGLogSerum, IgGLogBAL) %>%
+  pivot_longer(starts_with("Ig"), names_to = "Measurement", values_to = "Log10_Value") %>%
+  mutate(
+    Isotype = str_extract(Measurement, "Ig[AG]"),
+    Compartment = case_when(
+      str_detect(Measurement, "Nasosorption") ~ "NLF",
+      str_detect(Measurement, "Serum")        ~ "Serum",
+      str_detect(Measurement, "BAL")          ~ "BAL",
+      TRUE ~ NA_character_
+    ),
+    Antigen = factor(Antigens, levels = antigen_order),                     # plot order
+    Compartment = factor(Compartment, levels = c("Serum","BAL","NLF"))
+  ) %>%
+  select(-Measurement) %>%
+  filter(!is.na(Antigen), is.finite(Log10_Value),
+         HIV_Status == "HIV-")                           # remove NA/Inf/NaN
+
+pvals <- df_plot %>%
+  mutate(Antigen = factor(Antigen, levels = antigen_order, ordered = FALSE)) %>%
+  group_by(Compartment, Isotype) %>%
+  wilcox_test(Log10_Value ~ Antigen, paired = TRUE, ref.group = "Wildtype") %>%
+  ungroup() %>%
+  adjust_pvalue(method = "BH") %>%
+  add_xy_position(x = "Antigen", step.increase = 0.25) %>%
+  mutate(
+    p_label = ifelse(p.adj < 0.001, "p < 0.001", sprintf("p = %.3f", p.adj))
+  ) %>%
+  select(Compartment, Isotype, group1, group2, xmin, xmax, y.position, p, p.adj, p_label)
+
+Fig1B <- ggplot(df_plot, aes(Antigen, Log10_Value, fill = Antigen)) +
+  geom_boxplot(alpha = 0.85, outlier.shape = NA) +
+  geom_jitter(width = 0.18, alpha = 0.5, color = "black", size = 1.5) +
+  facet_grid(Isotype ~ Compartment, scales = "fixed") +
+  stat_pvalue_manual(
+    pvals,
+    label = "p_label",
+    xmin = "group1",
+    xmax = "group2",
+    y.position = "y.position",
+    tip.length = 0,
+    size = 6,
+    inherit.aes = FALSE
+  ) +
+  labs(x = "Antigen", y = "Log10 Antibody Concentrations (MSD AU/ml)", title = "B.") +
+  scale_fill_manual(values = cb_pal) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(size = 20, face = "bold", hjust = 0),
+    plot.title.position = "plot",
+    strip.text   = element_text(face = "bold", size = 18),
+    axis.title.x = element_text(face = "bold", size = 18),
+    axis.title.y = element_text(face = "bold", size = 18),
+    axis.text.x  = element_text(size = 18, angle = 45, hjust = 1),
+    axis.text.y  = element_text(size = 18),
+    panel.background = element_rect(fill = "white", colour = "black"),
+    panel.grid.major = element_line(color = "grey70", linewidth = 0.1),
+    panel.grid.minor = element_line(color = "grey85", linewidth = 0.08),
+    legend.position = "none"
+  ) +
+  scale_y_continuous(
+    breaks = seq(-1, 7, 1),
+    expand = expansion(mult = c(0, 0.05))
+  ) +
+  coord_cartesian(ylim = c(-1, 9))
+
+plot_data2 <- df_plot %>%
+  select(Sample_ID, Antigens, Compartment, Isotype, Log10_Value)
+write_csv(plot_data2, "Fig1B_data.csv")
+
+
+#Figure 1C
+vars <- c("IgGLogSerum","IgALogSerum","IgGLogBAL","IgALogBAL","IgGLogNasosorption","IgALogNasosorption")
+lab  <- c(
+  IgGLogSerum = "Serum IgG",
+  IgALogSerum = "Serum IgA",
+  IgGLogBAL = "BAL IgG",
+  IgALogBAL = "BAL IgA",
+  IgGLogNasosorption = "NLF IgG",
+  IgALogNasosorption = "NLF IgA"
+)
+lvls <- unname(lab[vars])
+antigens_keep <- c("Wildtype","Alpha","Beta","Gamma","Delta","Omicron")
+
+corr_long <- alldf %>%
+  filter(HIV_Status == "HIV-",
+         Antigens %in% antigens_keep) %>%
+  group_by(Antigens) %>%
+  group_modify(~{
+    X <- as.matrix(select(.x, all_of(vars)))
+    n <- ncol(X)
+    r <- p <- matrix(NA_real_, n, n, dimnames = list(vars, vars))
+    for (i in 1:n) for (j in 1:n) {
+      if (i == j) {
+        r[i,j] <- 1
+        p[i,j] <- 0
+        next
+      }
+      ok <- is.finite(X[,i]) & is.finite(X[,j])
+      if (sum(ok) >= 3) {
+        ct <- suppressWarnings(cor.test(X[ok,i], X[ok,j], method = "spearman", exact = FALSE))
+        r[i,j] <- unname(ct$estimate)
+        p[i,j] <- ct$p.value
+      }
+    }
+    tibble(var1 = rep(vars, each = n), var2 = rep(vars, times = n), r = c(r), p = c(p))
+  }) %>%
+  ungroup() %>%
+  mutate(
+    var1 = factor(recode(var1, !!!lab), levels = lvls),
+    var2 = factor(recode(var2, !!!lab), levels = lvls),
+    Antigens = factor(Antigens, levels = antigens_keep),
+    i = as.integer(var1),
+    j = as.integer(var2)
+  ) %>%
+  filter(i < j) %>%
+  distinct(Antigens, var1, var2, .keep_all = TRUE) %>%
+  mutate(
+    p.adj = p.adjust(p, method = "BH"),
+    sig = case_when(
+      is.na(p.adj)    ~ "",
+      p.adj < 0.001   ~ "***",
+      p.adj < 0.01    ~ "**",
+      p.adj < 0.05    ~ "*",
+      TRUE            ~ ""
+    ),
+    label = if_else(is.na(r), "", paste0(round(r, 2), "\n", sig))
+  )
+
+Fig1C <- ggplot(corr_long, aes(var1, var2, fill = r)) +
+  geom_tile() +
+  geom_text(aes(label = na_if(label, "")), size = 4) +
+  scale_fill_gradient2(
+    limits = c(-1,1), midpoint = 0,
+    low = "#4575b4", high = "#d73027", na.value = "grey90"
+  ) +
+  coord_equal() +
+  labs(x = NULL, y = NULL, fill = "r", title = "C.") +
+  facet_wrap(~Antigens, ncol = 6) +
+  theme_minimal(base_size = 18) +
+  theme(
+    plot.title = element_text(size = 20, face = "bold", hjust = 0),
+    plot.title.position = "plot",
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 18),
+    axis.text.y = element_text(size = 18),
+    strip.text = element_text(size = 18, face = "bold"),
+    legend.title = element_text(size = 18, face = "bold"),
+    legend.text = element_text(size = 18),
+    panel.background = element_rect(fill = "white", colour = "black"),
+    panel.grid.major = element_line(color = "grey70", linewidth = .1),
+    panel.grid.minor = element_line(color = "grey85", linewidth = .08)
+  )
+
+plot_data3 <- corr_long
+write_csv(plot_data3, "Fig1C_data.csv")
+
+fig1c_n <- alldf %>%
+  filter(
+    HIV_Status == "HIV-",
+    Antigens %in% antigens_keep
+  ) %>%
+  group_by(Antigens) %>%
+  summarise(
+    n = sum(complete.cases(
+      IgGLogSerum, IgALogSerum,
+      IgGLogBAL, IgALogBAL,
+      IgGLogNasosorption, IgALogNasosorption
+    )),
+    .groups = "drop"
+  )
+
+
+#Figure 1D
+comp_cols <- c(NLF = "#0072B2", Serum = "#D55E00")
+
+df <- alldf %>%
+  select(Sample_ID, Antigens, Vacc_Status, HIV_Status, SerumInh, NasosorptionInh) %>%
+  filter(HIV_Status == "HIV-",
+         Antigens %in% antigens_keep) %>%
+  pivot_longer(c(SerumInh, NasosorptionInh), names_to = "Compartment", values_to = "Neutralization") %>%
+  mutate(
+    Compartment = recode(Compartment, SerumInh = "Serum", NasosorptionInh = "NLF"),
+    Antigens = factor(Antigens, levels = antigens_keep),
+    Compartment = factor(Compartment, levels = c("Serum","NLF"))
+  )
+
+pvals_1D <- df %>%
+  group_by(Antigens) %>%
+  wilcox_test(Neutralization ~ Compartment, paired = TRUE) %>%
+  ungroup() %>%
+  adjust_pvalue(method = "BH") %>%
+  mutate(
+    p_label = ifelse(p.adj < 0.001, "p < 0.001", sprintf("FDR = %.3f", p.adj))
+  ) %>%
+  left_join(
+    df %>%
+      group_by(Antigens) %>%
+      summarise(y.position = max(Neutralization, na.rm = TRUE) + 2, .groups = "drop"),
+    by = "Antigens"
+  ) %>%
+  mutate(y.position = pmin(y.position, 100))
+
+Fig1D <- ggplot(df, aes(x = Compartment, y = Neutralization, fill = Compartment)) +
+  geom_boxplot(alpha = .85, outlier.shape = NA) +
+  geom_jitter(width = .2, alpha = .6, size = 2, color = "grey20") +
+  facet_wrap(~Antigens, nrow = 3) +
+  stat_pvalue_manual(
+    pvals_1D,
+    label = "p_label",
+    y.position = "y.position",
+    tip.length = 0,
+    size = 6
+  ) +
+  scale_fill_manual(values = comp_cols) +
+  scale_y_continuous(
+    limits = c(0, 110),
+    breaks = seq(20, 100, 20),
+    expand = expansion(mult = c(0, 0.05))
+  ) +
+  labs(x = "Compartment", y = "ACE2 inhibition (%)", title = "D.") +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(size = 20, face = "bold", hjust = 0),
+    plot.title.position = "plot",
+    strip.text = element_text(face = "bold", size = 18),
+    axis.title = element_text(face = "bold", size = 18),
+    axis.text = element_text(size = 18),
+    panel.background = element_rect(fill = "white", colour = "black"),
+    panel.grid.major = element_line(color = "grey70", linewidth = .1),
+    panel.grid.minor = element_line(color = "grey85", linewidth = .08),
+    legend.position = "none"
+  )
+
+plot_data4 <- df %>%
+  select(Sample_ID, Antigens, Compartment,Neutralization)
+write_csv(plot_data4, "Fig1D_data.csv")
+
+
+
+#Figure 1E
+
+antigen_order <- c("Wildtype","Alpha","Beta","Gamma","Delta","Omicron")
+comp_order    <- c("Serum","NLF")
+iso_order     <- c("IgG","IgA")
+
+alldf_long <- alldf %>%
+  select(Sample_ID, HIV_Status, Vacc_Status, Antigens, SerumInh, NasosorptionInh,
+         IgALogNasosorption, IgALogSerum, IgALogBAL,
+         IgGLogNasosorption, IgGLogSerum, IgGLogBAL) %>%
+  filter(HIV_Status == "HIV-",
+         Antigens != "RBD") %>%
+  pivot_longer(starts_with("Ig"), names_to = "Meas", values_to = "Log10_Value") %>%
+  mutate(
+    Isotype = str_extract(Meas, "Ig[AG]"),
+    Isotype = factor(Isotype, levels = iso_order),
+    Compartment = case_when(
+      str_detect(Meas, "Nasosorption") ~ "NLF",
+      str_detect(Meas, "Serum") ~ "Serum",
+      str_detect(Meas, "BAL") ~ "BAL"
+    ),
+    Neutralization = case_when(
+      Compartment == "Serum" ~ SerumInh,
+      Compartment == "NLF"   ~ NasosorptionInh
+    ),
+    Antigens = factor(Antigens, levels = antigen_order),
+    Compartment = factor(Compartment, levels = comp_order)
+  ) %>%
+  select(-Meas, -SerumInh, -NasosorptionInh) %>%
+  filter(
+    Compartment %in% c("Serum","NLF"),
+    is.finite(Log10_Value),
+    is.finite(Neutralization)
+  )
+
+cor_results <- alldf_long %>%
+  group_by(Antigens, Compartment, Isotype) %>%
+  summarise(
+    cor = cor(Log10_Value, Neutralization, method = "spearman", use = "complete.obs"),
+    p   = suppressWarnings(cor.test(Log10_Value, Neutralization, method = "spearman", exact = FALSE)$p.value),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    Isotype = factor(Isotype, levels = iso_order),
+    p.adj = p.adjust(p, method = "BH"),
+    p_label = ifelse(p.adj < 0.001, "p < 0.001", sprintf("p = %.3f", p.adj)),
+    y_pos   = if_else(Isotype == "IgG", 118, 108),
+    label   = paste0("r = ", round(cor, 2), ", ", p_label),
+    Antigens = factor(Antigens, levels = antigen_order),
+    Compartment = factor(Compartment, levels = comp_order)
+  ) %>%
+  arrange(Antigens, Compartment, Isotype)
+
+Fig1E <- ggplot(alldf_long, aes(Log10_Value, Neutralization, color = Isotype)) +
+  geom_point(alpha = .6, size = 2) +
+  geom_smooth(method = "lm", se = FALSE) +
+  facet_wrap(~Compartment + Antigens, nrow = 2, ncol = 6) +
+  geom_text(
+    data = cor_results,
+    aes(x = -Inf, y = y_pos, label = label, color = Isotype),
+    inherit.aes = FALSE,
+    hjust = -0.05, vjust = 1.2, size = 5
+  ) +
+  scale_color_manual(
+    breaks = c("IgG", "IgA"),
+    values = c(IgG = "#d95f02", IgA = "#1b9e77")
+  ) +
+  labs(x = "Log10 Antibody Level (MSD AU/ml)", y = "ACE2 Inhibition (%)", title = "E.") +
+  scale_y_continuous(breaks = seq(0, 120, 20), expand = expansion(mult = c(0, 0.05))) +
+  coord_cartesian(ylim = c(-1, 119)) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(size = 20, face = "bold", hjust = 0),
+    plot.title.position = "plot",
+    strip.text = element_text(face = "bold", size = 18),
+    axis.title = element_text(face = "bold", size = 18),
+    axis.text = element_text(size = 18),
+    panel.background = element_rect(fill = "white", colour = "black"),
+    panel.grid.major = element_line(color = "grey70", linewidth = .1),
+    panel.grid.minor = element_line(color = "grey85", linewidth = .08)
+  )
+
+plot_data1E <- alldf_long %>%
+  select(Sample_ID, Antigens, Compartment, Isotype, Log10_Value, Neutralization)
+write_csv(plot_data1E, "Fig1E_data.csv")
+
+
+strip_margins <- theme(plot.margin = margin(0,0,0,0))
+
+A <- wrap_elements(full = Fig1A + strip_margins)
+B <- wrap_elements(full = Fig1B + strip_margins)
+C <- wrap_elements(full = Fig1C + strip_margins)
+D <- wrap_elements(full = Fig1D + strip_margins)
+E <- wrap_elements(full = Fig1E + strip_margins)
+
+# Bottom row with smaller D
+bottom_row <- D + E + plot_layout(ncol = 2, widths = c(0.4, 1))
+top_row <- A + B + plot_layout(ncol = 2, widths = c(0.6, 1))
+
+Fig1 <- top_row /
+        C /
+        bottom_row +
+  plot_layout(
+    heights = c(1, 0.5, 1),
+    guides = "collect"
+  ) &
+  theme(plot.margin = margin(0,0,0,0))
+
+ggsave("Figure1.png", Fig1, width = 18, height = 22, dpi = 300, bg = "white")
+
+#| label: fig1-n
+#| include: false
+
+# ---------- Fig1A (WT only) ----------
+fig1a_wt_n <- wt_data %>%
+  filter(Antigens == "Wildtype") %>%
+  group_by(Compartment, Isotype) %>%
+  summarise(n = n_distinct(Sample_ID), .groups = "drop")
+
+n_fig1a_wt_serum_iga <- fig1a_wt_n$n[fig1a_wt_n$Compartment == "Serum" & fig1a_wt_n$Isotype == "IgA"]
+n_fig1a_wt_serum_igg <- fig1a_wt_n$n[fig1a_wt_n$Compartment == "Serum" & fig1a_wt_n$Isotype == "IgG"]
+n_fig1a_wt_bal_iga   <- fig1a_wt_n$n[fig1a_wt_n$Compartment == "BAL"   & fig1a_wt_n$Isotype == "IgA"]
+n_fig1a_wt_bal_igg   <- fig1a_wt_n$n[fig1a_wt_n$Compartment == "BAL"   & fig1a_wt_n$Isotype == "IgG"]
+n_fig1a_wt_nlf_iga   <- fig1a_wt_n$n[fig1a_wt_n$Compartment == "NLF"   & fig1a_wt_n$Isotype == "IgA"]
+n_fig1a_wt_nlf_igg   <- fig1a_wt_n$n[fig1a_wt_n$Compartment == "NLF"   & fig1a_wt_n$Isotype == "IgG"]
+
+# ---------- Fig1B (WT only) ----------
+fig1b_wt_n <- df_plot %>%
+  filter(Antigen == "Wildtype") %>%
+  group_by(Compartment, Isotype) %>%
+  summarise(n = n_distinct(Sample_ID), .groups = "drop")
+
+n_fig1b_wt_serum_iga <- fig1b_wt_n$n[fig1b_wt_n$Compartment == "Serum" & fig1b_wt_n$Isotype == "IgA"]
+n_fig1b_wt_serum_igg <- fig1b_wt_n$n[fig1b_wt_n$Compartment == "Serum" & fig1b_wt_n$Isotype == "IgG"]
+n_fig1b_wt_bal_iga   <- fig1b_wt_n$n[fig1b_wt_n$Compartment == "BAL"   & fig1b_wt_n$Isotype == "IgA"]
+n_fig1b_wt_bal_igg   <- fig1b_wt_n$n[fig1b_wt_n$Compartment == "BAL"   & fig1b_wt_n$Isotype == "IgG"]
+n_fig1b_wt_nlf_iga   <- fig1b_wt_n$n[fig1b_wt_n$Compartment == "NLF"   & fig1b_wt_n$Isotype == "IgA"]
+n_fig1b_wt_nlf_igg   <- fig1b_wt_n$n[fig1b_wt_n$Compartment == "NLF"   & fig1b_wt_n$Isotype == "IgG"]
+
+# ---------- Fig1C (WT only) ----------
+vars_fig1c <- c(
+  "IgGLogSerum", "IgALogSerum",
+  "IgGLogBAL", "IgALogBAL",
+  "IgGLogNasosorption", "IgALogNasosorption"
+)
+
+n_fig1c_wt <- alldf %>%
+  filter(
+    HIV_Status == "HIV-",
+    Antigens == "Wildtype"
+  ) %>%
+  summarise(n = sum(complete.cases(across(all_of(vars_fig1c))))) %>%
+  pull(n)
+
+# ---------- Fig1D (WT only) ----------
+fig1d_wt_n <- df %>%
+  filter(Antigens == "Wildtype") %>%
+  group_by(Compartment) %>%
+  summarise(n = n_distinct(Sample_ID), .groups = "drop")
+
+n_fig1d_wt_serum <- fig1d_wt_n$n[fig1d_wt_n$Compartment == "Serum"]
+n_fig1d_wt_nlf   <- fig1d_wt_n$n[fig1d_wt_n$Compartment == "NLF"]
+
+# ---------- Fig1E (WT only) ----------
+fig1e_wt_n <- alldf_long %>%
+  filter(
+    Antigens == "Wildtype",
+    Compartment %in% c("Serum", "NLF"),
+    is.finite(Log10_Value),
+    is.finite(Neutralization)
+  ) %>%
+  group_by(Compartment, Isotype) %>%
+  summarise(n = n_distinct(Sample_ID), .groups = "drop")
+
+n_fig1e_wt_serum_iga <- fig1e_wt_n$n[fig1e_wt_n$Compartment == "Serum" & fig1e_wt_n$Isotype == "IgA"]
+n_fig1e_wt_serum_igg <- fig1e_wt_n$n[fig1e_wt_n$Compartment == "Serum" & fig1e_wt_n$Isotype == "IgG"]
+n_fig1e_wt_nlf_iga   <- fig1e_wt_n$n[fig1e_wt_n$Compartment == "NLF"   & fig1e_wt_n$Isotype == "IgA"]
+n_fig1e_wt_nlf_igg   <- fig1e_wt_n$n[fig1e_wt_n$Compartment == "NLF"   & fig1e_wt_n$Isotype == "IgG"]
+
+
+```
+
+![](Figure1.png){width="100%" fig-align="center"}
+
+**Figure 1 \| SARS-CoV-2–specific binding antibody responses in systemic and mucosal compartments.**
+
+Serum, bronchoalveolar lavage (BAL), nasal lining fluid (NLF) from COVID-19 unvaccinated HIV-uninfected adults were analysed for IgG and IgA antibody responses against SARS-CoV-2 Spike wildtype and variants of concern (VOCs), including Alpha, Beta, Delta, Gamma and Omicron. Antibody titres were quantified using a multiplex MSD assay, and ACE2–Spike binding inhibition was measured using a surrogate neutralisation assay. **a,** Box plots comparing WT SARS-CoV-2 Spike-, Receptor Binding Domain (RBD)- and Nucleocapsid-specific IgG and IgA antibody concentrations in serum, BAL, and NLF (n=41). Antibody concentrations are expressed as WHO binding antibody units (BAU ml⁻¹). Dotted orange line represents cut-off for seropositivity. **b,** Box plots showing the breadth of IgG and IgA antibody responses against SARS-CoV-2 Wildtype, Alpha, Beta, Delta, Gamma and Omicron variants in serum, BAL and NLF (n=41). **c,** Correlogram depicting relationships between IgG and IgA binding antibody titres against Wildtype, Beta, Delta and Omicron variants across serum, BAL and NLF (n = 41) samples. Numeric values indicate Spearman’s correlation coefficients (r). Asterisks denote statistical significance (\*P ≤ 0.05, \*\*P ≤ 0.01, \*\*\*P ≤ 0.001). **d,** Box plots showingACE2–Spike binding inhibition activity (%) in serum and NLF against SARS-CoV-2 Wildtype, Alpha, Beta, Delta, Gamma and Omicron variants (n=41). **e,** Scatter plots showing correlations between ACE2–Spike binding inhibition activity (%) and IgG and IgA antibody titres against SARS-CoV-2 Wildtype, Alpha, Beta, Delta, Gamma and Omicron variants in serum and NLF (n = 41).Data in panels **a, b, c** and **e** were log₁₀-transformed for statistical analysis and visualisation. Box plots show the interquartile range (25th–75th percentiles), with the median indicated by a horizontal line. Whiskers extend to values within 1.5× the interquartile range, and points beyond this range represent outliers. Statistical significance was assessed using two-sided Wilcoxon rank-sum tests (**a, b, d**) and Spearman’s rank correlation tests (**c, e**); p \< 0.05 was considered significant. p values were adjusted for multiple comparisons within each figure panel using the Benjamini-Hochberg false discovery rate (FDR) method.
+
+Fig. 1A (WT): serum IgA n=`r n_fig1a_wt_serum_iga`, serum IgG n=`r n_fig1a_wt_serum_igg`, BAL IgA n=`r n_fig1a_wt_bal_iga`, BAL IgG n=`r n_fig1a_wt_bal_igg`, NLF IgA n=`r n_fig1a_wt_nlf_iga`, NLF IgG n=`r n_fig1a_wt_nlf_igg`.
+
+Fig. 1B (WT): serum IgA n=`r n_fig1b_wt_serum_iga`, serum IgG n=`r n_fig1b_wt_serum_igg`, BAL IgA n=`r n_fig1b_wt_bal_iga`, BAL IgG n=`r n_fig1b_wt_bal_igg`, NLF IgA n=`r n_fig1b_wt_nlf_iga`, NLF IgG n=`r n_fig1b_wt_nlf_igg`.
+
+Fig. 1C (WT): n=`r n_fig1c_wt`.
+
+Fig. 1D (WT): serum n=`r n_fig1d_wt_serum`, NLF n=`r n_fig1d_wt_nlf`.
+
+Fig. 1E (WT): serum IgA n=`r n_fig1e_wt_serum_iga`, serum IgG n=`r n_fig1e_wt_serum_igg`, NLF IgA n=`r n_fig1e_wt_nlf_iga`, NLF IgG n=`r n_fig1e_wt_nlf_igg`.'
+
+# **Airway mucosal SARS-CoV-2–specific antibody responses are preserved in ART-treated PWH**
+
+ART-treated PWH generate SARS-CoV-2–specific antibody responses in blood that are broadly comparable to those of HIV-uninfected individuals. However, whether mucosal SARS-CoV-2–specific antibody responses are similarly preserved across respiratory compartments remains unclear, particularly given evidence of persistent immune dysregulation at barrier sites despite systemic viral suppression. To address this, we compared Spike-specific IgA and IgG responses in serum, BAL, and NLF by HIV status.
+
+```{r}
+#| label: fig2-build
+#| include: false
+
+#Figure 2A
+wt_data2 <- IgAIgGWHO_long %>%
+  filter(Antigens %in% c("Nucleocapsid", "RBD", "Wildtype"),
+         Isotype == "IgA") %>%
+  mutate(
+    Compartment = factor(Compartment, levels = c("Serum", "BAL", "NLF")),
+    Antigens = factor(Antigens, levels = c("Nucleocapsid", "RBD", "Wildtype"))
+  ) %>%
+  filter(is.finite(Log10_Value), !is.na(HIV_Status))
+
+pvals2 <- wt_data2 %>%
+  group_by(Antigens, Compartment) %>%
+  wilcox_test(Log10_Value ~ HIV_Status) %>%
+  ungroup() %>%
+  adjust_pvalue(method = "BH") %>%
+  add_xy_position(x = "HIV_Status") %>%
+  mutate(
+    p_label = ifelse(p.adj < 0.001, "p < 0.001", sprintf("p = %.3f", p.adj))
+  ) %>%
+  select(Antigens, Compartment, group1, group2, xmin, xmax, y.position, p, p.adj, p_label)
+
+Fig2A <- ggplot(wt_data2, aes(HIV_Status, Log10_Value, fill = HIV_Status)) +
+  geom_boxplot(alpha = .85, outlier.shape = NA) +
+  geom_jitter(width = .2, alpha = .5, color = "black", size = 1.5) +
+  facet_grid(Antigens ~ Compartment) +
+  stat_pvalue_manual(
+    pvals2,
+    label = "p_label",
+    y.position = "y.position",
+    xmin = "group1",
+    xmax = "group2",
+    tip.length = 0,
+    size = 6,
+    inherit.aes = FALSE
+  ) +
+  labs(
+    x = "HIV Status",
+    y = "Log10 IgA Antibody Concentrations (WHO BAU/ml)",
+    title = "A."
+  ) +
+  scale_fill_manual(values = c("HIV-" = "#1f77b4", "HIV+" = "#d62728")) +
+  scale_y_continuous(
+    breaks = 0:5,
+    expand = expansion(mult = c(0, 0.05))
+  ) +
+  coord_cartesian(ylim = c(0, 6)) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(size = 20, face = "bold", hjust = 0),
+    plot.title.position = "plot",
+    strip.text = element_text(face = "bold", size = 16),
+    axis.title = element_text(face = "bold", size = 16),
+    axis.text = element_text(size = 14),
+    panel.background = element_rect(fill = "white", colour = "black"),
+    panel.grid.major = element_line(color = "grey70", linewidth = .1),
+    panel.grid.minor = element_line(color = "grey85", linewidth = .08),
+    legend.position = "none"
+  )
+
+plot_data2A <- wt_data2 %>%
+  select(Sample_ID, Antigens, Compartment, Log10_Value, HIV_Status)
+write_csv(plot_data2A, "Fig2A_data.csv")
+
+#Figure 2B
+wt_data3 <- IgAIgGWHO_long %>%
+  filter(Antigens %in% c("Nucleocapsid", "RBD", "Wildtype"),
+         Isotype == "IgG") %>%
+  mutate(
+    Compartment = factor(Compartment, levels = c("Serum", "BAL", "NLF")),
+    Antigens = factor(Antigens, levels = c("Nucleocapsid", "RBD", "Wildtype"))
+  ) %>%
+  filter(is.finite(Log10_Value), !is.na(HIV_Status))
+
+pvals3 <- wt_data3 %>%
+  group_by(Antigens, Compartment) %>%
+  wilcox_test(Log10_Value ~ HIV_Status) %>%
+  ungroup() %>%
+  adjust_pvalue(method = "BH") %>%
+  add_xy_position(x = "HIV_Status") %>%
+  mutate(
+    p_label = ifelse(p.adj < 0.001, "p < 0.001", sprintf("p = %.3f", p.adj))
+  ) %>%
+  select(Antigens, Compartment, group1, group2, xmin, xmax, y.position, p, p.adj, p_label)
+
+Fig2B <- ggplot(wt_data3, aes(HIV_Status, Log10_Value, fill = HIV_Status)) +
+  geom_boxplot(alpha = .85, outlier.shape = NA) +
+  geom_jitter(width = .2, alpha = .5, color = "black", size = 1.5) +
+    geom_hline(
+    data = igg_line,
+    aes(yintercept = yintercept),
+    inherit.aes = FALSE,
+    colour = "#d95f02",
+    linetype = "dotted",
+    linewidth = 1
+  ) +
+  facet_grid(Antigens ~ Compartment) +
+  stat_pvalue_manual(
+    pvals3,
+    label = "p_label",
+    y.position = "y.position",
+    xmin = "group1",
+    xmax = "group2",
+    tip.length = 0,
+    size = 6,
+    inherit.aes = FALSE
+  ) +
+  labs(
+    x = "HIV Status",
+    y = "Log10 IgG Antibody Concentrations (WHO BAU/ml)",
+    title = "B."
+  ) +
+  scale_fill_manual(values = c("HIV-" = "#1f77b4", "HIV+" = "#d62728")) +
+  scale_y_continuous(
+    breaks = 0:5,
+    expand = expansion(mult = c(0, 0.05))
+  ) +
+  coord_cartesian(ylim = c(0, 6)) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(size = 20, face = "bold", hjust = 0),
+    plot.title.position = "plot",
+    strip.text = element_text(face = "bold", size = 16),
+    axis.title = element_text(face = "bold", size = 16),
+    axis.text = element_text(size = 14),
+    panel.background = element_rect(fill = "white", colour = "black"),
+    panel.grid.major = element_line(color = "grey70", linewidth = .1),
+    panel.grid.minor = element_line(color = "grey85", linewidth = .08),
+    legend.position = "none"
+  )
+
+pvals3 %>% select(Antigens, Compartment, p, p.adj)
+
+plot_data2B <- wt_data3 %>%
+  select(Sample_ID, Antigens, Compartment, Log10_Value, HIV_Status)
+write_csv(plot_data2B, "Fig2B_data.csv")
+
+
+#Figure 2C
+antigens_keep <- c("Wildtype","Alpha","Beta","Gamma","Delta","Omicron")
+
+dfNT <- alldf %>%
+  select(Sample_ID, Antigens, HIV_Status, SerumInh, NasosorptionInh) %>%
+  filter(Antigens %in% antigens_keep) %>%
+  pivot_longer(
+    c(SerumInh, NasosorptionInh),
+    names_to = "Compartment",
+    values_to = "Neutralization"
+  ) %>%
+  mutate(
+    Compartment = recode(Compartment, SerumInh = "Serum", NasosorptionInh = "NLF"),
+    Antigens = factor(Antigens, levels = antigens_keep),
+    Compartment = factor(Compartment, levels = c("Serum", "NLF"))
+  ) %>%
+  filter(is.finite(Neutralization))
+
+pvalsNT <- dfNT %>%
+  group_by(Antigens, Compartment) %>%
+  wilcox_test(Neutralization ~ HIV_Status, paired = FALSE) %>%
+  ungroup() %>%
+  adjust_pvalue(method = "BH") %>%
+  mutate(
+    p_label = ifelse(p.adj < 0.001, "p < 0.001", sprintf("p = %.3f", p.adj)),
+    group1 = "HIV-",
+    group2 = "HIV+"
+  ) %>%
+  left_join(
+    dfNT %>%
+      group_by(Antigens, Compartment) %>%
+      summarise(y.position = max(Neutralization, na.rm = TRUE) + 2, .groups = "drop"),
+    by = c("Antigens", "Compartment")
+  ) %>%
+  mutate(y.position = pmin(y.position, 100)) %>%
+  select(Antigens, Compartment, group1, group2, p, p.adj, p_label, y.position)
+
+Fig2C <- ggplot(dfNT, aes(HIV_Status, Neutralization, fill = HIV_Status)) +
+  geom_boxplot(alpha = .85, outlier.shape = NA) +
+  geom_jitter(width = .2, alpha = .6, size = 2, color = "grey20") +
+  facet_grid(Compartment ~ Antigens) +
+  stat_pvalue_manual(
+    pvalsNT,
+    label = "p_label",
+    y.position = "y.position",
+    xmin = "group1",
+    xmax = "group2",
+    tip.length = 0,
+    size = 6,
+    inherit.aes = FALSE
+  ) +
+  scale_fill_manual(values = c("HIV-" = "#1f77b4", "HIV+" = "#d62728")) +
+  scale_y_continuous(
+    limits = c(0, 110),
+    breaks = seq(20, 100, 20),
+    expand = expansion(mult = c(0, 0.05))
+  ) +
+  labs(x = "HIV Status", y = "ACE2 inhibition (%)", title = "C.") +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(size = 20, face = "bold", hjust = 0),
+    plot.title.position = "plot",
+    strip.text = element_text(face = "bold", size = 18),
+    axis.title = element_text(face = "bold", size = 18),
+    axis.text = element_text(size = 18),
+    panel.background = element_rect(fill = "white", colour = "black"),
+    panel.grid.major = element_line(color = "grey70", linewidth = .1),
+    panel.grid.minor = element_line(color = "grey85", linewidth = .08),
+    legend.position = "none"
+  )
+
+plot_data2C <- dfNT %>%
+  select(Sample_ID, Antigens, Compartment, Neutralization, HIV_Status)
+write_csv(plot_data2C, "Fig2C_data.csv")
+
+strip_margins <- theme(plot.margin = margin(0,0,0,0))
+
+A <- wrap_elements(full = Fig2A + strip_margins)
+B <- wrap_elements(full = Fig2B + strip_margins)
+C <- wrap_elements(full = Fig2C + strip_margins)
+
+Fig2 <- (A + B) / C +
+  plot_layout(
+    heights = c(1, 0.7),
+    guides = "collect"
+  ) &
+  theme(plot.margin = margin(0,0,0,0))
+
+ggsave("Figure2.png", Fig2, width = 15, height = 16, dpi = 300, bg = "white")
+
+
+
+#| label: fig2-n
+#| include: false
+
+# ---------- Fig2A (WT IgA only) ----------
+fig2a_wt_n <- wt_data2 %>%
+  filter(Antigens == "Wildtype") %>%
+  group_by(Compartment, HIV_Status) %>%
+  summarise(n = n_distinct(Sample_ID), .groups = "drop")
+
+n_fig2a_wt_serum_hivneg <- fig2a_wt_n$n[fig2a_wt_n$Compartment == "Serum" & fig2a_wt_n$HIV_Status == "HIV-"]
+n_fig2a_wt_serum_hivpos <- fig2a_wt_n$n[fig2a_wt_n$Compartment == "Serum" & fig2a_wt_n$HIV_Status == "HIV+"]
+n_fig2a_wt_bal_hivneg   <- fig2a_wt_n$n[fig2a_wt_n$Compartment == "BAL"   & fig2a_wt_n$HIV_Status == "HIV-"]
+n_fig2a_wt_bal_hivpos   <- fig2a_wt_n$n[fig2a_wt_n$Compartment == "BAL"   & fig2a_wt_n$HIV_Status == "HIV+"]
+n_fig2a_wt_nlf_hivneg   <- fig2a_wt_n$n[fig2a_wt_n$Compartment == "NLF"   & fig2a_wt_n$HIV_Status == "HIV-"]
+n_fig2a_wt_nlf_hivpos   <- fig2a_wt_n$n[fig2a_wt_n$Compartment == "NLF"   & fig2a_wt_n$HIV_Status == "HIV+"]
+
+# ---------- Fig2B (WT IgG only) ----------
+fig2b_wt_n <- wt_data3 %>%
+  filter(Antigens == "Wildtype") %>%
+  group_by(Compartment, HIV_Status) %>%
+  summarise(n = n_distinct(Sample_ID), .groups = "drop")
+
+n_fig2b_wt_serum_hivneg <- fig2b_wt_n$n[fig2b_wt_n$Compartment == "Serum" & fig2b_wt_n$HIV_Status == "HIV-"]
+n_fig2b_wt_serum_hivpos <- fig2b_wt_n$n[fig2b_wt_n$Compartment == "Serum" & fig2b_wt_n$HIV_Status == "HIV+"]
+n_fig2b_wt_bal_hivneg   <- fig2b_wt_n$n[fig2b_wt_n$Compartment == "BAL"   & fig2b_wt_n$HIV_Status == "HIV-"]
+n_fig2b_wt_bal_hivpos   <- fig2b_wt_n$n[fig2b_wt_n$Compartment == "BAL"   & fig2b_wt_n$HIV_Status == "HIV+"]
+n_fig2b_wt_nlf_hivneg   <- fig2b_wt_n$n[fig2b_wt_n$Compartment == "NLF"   & fig2b_wt_n$HIV_Status == "HIV-"]
+n_fig2b_wt_nlf_hivpos   <- fig2b_wt_n$n[fig2b_wt_n$Compartment == "NLF"   & fig2b_wt_n$HIV_Status == "HIV+"]
+
+# ---------- Fig2C (WT neutralization only) ----------
+fig2c_wt_n <- dfNT %>%
+  filter(Antigens == "Wildtype") %>%
+  group_by(Compartment, HIV_Status) %>%
+  summarise(n = n_distinct(Sample_ID), .groups = "drop")
+
+n_fig2c_wt_serum_hivneg <- fig2c_wt_n$n[fig2c_wt_n$Compartment == "Serum" & fig2c_wt_n$HIV_Status == "HIV-"]
+n_fig2c_wt_serum_hivpos <- fig2c_wt_n$n[fig2c_wt_n$Compartment == "Serum" & fig2c_wt_n$HIV_Status == "HIV+"]
+n_fig2c_wt_nlf_hivneg   <- fig2c_wt_n$n[fig2c_wt_n$Compartment == "NLF"   & fig2c_wt_n$HIV_Status == "HIV-"]
+n_fig2c_wt_nlf_hivpos   <- fig2c_wt_n$n[fig2c_wt_n$Compartment == "NLF"   & fig2c_wt_n$HIV_Status == "HIV+"]
+
+
+wt_data2ab  <- dfNT %>%
+  select(Sample_ID, Antigens, Compartment, HIV_Status)
+write_csv(wt_data2ab, "Fig2C_data.csv")
+
+wt_data2abc  <- wt_data3  %>%
+  select(Sample_ID, Antigens, Compartment, HIV_Status)
+write_csv(wt_data2abc, "Fig2B_data.csv")
+```
+
+![](Figure2.png){width="100%" fig-align="center"}
+
+**Figure 2 \| Comparable SARS-CoV-2–specific antibody responses and ACE2 inhibition between ART-treated people with HIV (PWH) and HIV-uninfected individuals across systemic and mucosal compartments.**
+
+SARS-CoV-2 Spike–specific IgG and IgA binding antibody titres and ACE2–Spike binding inhibition activity were compared between PWH and HIV-uninfected individuals in serum, nasal lining fluid (NLF) and bronchoalveolar lavage (BAL) samples against Wildtype, Alpha, Beta, Delta, Gamma and Omicron variants. Antibody titres were quantified using a multiplex MSD assay, and ACE2–Spike binding inhibition was measured using a surrogate neutralisation assay. **a,** Box plots comparing SARS-CoV-2 WT Spike-, RBD- and Nucleocapsid–specific IgA antibody concentrations between PWH and HIV-uninfected individuals. Results are expressed as WHO binding antibody units (BAU ml⁻¹), across systemic and mucosal compartments (HIV-, n = 41, HIV+, n =47). **b,** Box plots comparing SARS-CoV-2 WT Spike-, RBD- and Nucleocapsid–specific IgG antibody concentrations between PWH and HIV-uninfected individuals. Results are expressed as WHO binding antibody units (BAU ml⁻¹), across systemic and mucosal compartments (HIV-, n =41, HIV+, n = 47). Dotted orange line represents cut-off for seropositivity. **c**, Box plots comparing ACE2–Spike binding inhibition activity (%) against wildtype and VOCs (Alpha, Beta, Delta, Gamma and Omicron) between PWH and HIV-uninfected individuals in serum and NLF (HIV-, n = 41, HIV+, n = 46). Box plots show the interquartile range (25th–75th percentiles), with the median indicated by the centre line. Whiskers extend to values within 1.5× the interquartile range, and points beyond the whiskers denote outliers. Data in panel **a** was log₁₀-transformed for statistical analysis and visualisation. Statistical significance was assessed using two-sided Wilcoxon rank-sum tests; p \< 0.05 was considered significant. p values were adjusted for multiple comparisons within each figure panel using the Benjamini-Hochberg false discovery rate (FDR) method.
+
+Fig. 2A (WT IgA): serum HIV− n=`r n_fig2a_wt_serum_hivneg`, HIV+ n=`r n_fig2a_wt_serum_hivpos`; BAL HIV− n=`r n_fig2a_wt_bal_hivneg`, HIV+ n=`r n_fig2a_wt_bal_hivpos`; NLF HIV− n=`r n_fig2a_wt_nlf_hivneg`, HIV+ n=`r n_fig2a_wt_nlf_hivpos`.
+
+Fig. 2B (WT IgG): serum HIV− n=`r n_fig2b_wt_serum_hivneg`, HIV+ n=`r n_fig2b_wt_serum_hivpos`; BAL HIV− n=`r n_fig2b_wt_bal_hivneg`, HIV+ n=`r n_fig2b_wt_bal_hivpos`; NLF HIV− n=`r n_fig2b_wt_nlf_hivneg`, HIV+ n=`r n_fig2b_wt_nlf_hivpos`.
+
+Fig. 2C (WT neutralization): serum HIV− n=`r n_fig2c_wt_serum_hivneg`, HIV+ n=`r n_fig2c_wt_serum_hivpos`; NLF HIV− n=`r n_fig2c_wt_nlf_hivneg`, HIV+ n=`r n_fig2c_wt_nlf_hivpos`.
+
+# **SARS-CoV-2-specific T cell responses are enriched in the lung, uncoupled from antibody levels and preserved under suppressive ART**
+
+Given the close alignment between serum and BAL antibody responses, we next assessed whether SARS-CoV-2–specific T cell responses were similarly coordinated across compartments. Using intracellular cytokine staining, we quantified Spike- and Nucleocapsid-specific CD4⁺ and CD8⁺ T cells in paired BAL and blood samples.
+
+```{r}
+#| label: fig3-build
+#| include: false
+
+#Figure 3A
+CD4LCdf <- read_csv("CD4TcellsAg.csv")
+
+CD4LCdf_1 <- CD4LCdf %>%
+  group_by(PID, Compartment, HIV_status, Vacc_status, Stimulant) %>%
+  summarise(
+    TNF    = mean(TNF, na.rm = TRUE),
+    IFN    = mean(IFN, na.rm = TRUE),
+    TNFIFN = mean(TNFIFN, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  left_join(
+    CD4LCdf %>%
+      group_by(PID, Compartment, HIV_status, Vacc_status, Stimulant) %>%
+      summarise(
+        TNF    = mean(TNF, na.rm = TRUE),
+        IFN    = mean(IFN, na.rm = TRUE),
+        TNFIFN = mean(TNFIFN, na.rm = TRUE),
+        .groups = "drop"
+      ) %>%
+      filter(Stimulant == "Unstim") %>%
+      transmute(
+        PID, Compartment, HIV_status, Vacc_status,
+        TNF_unstim = TNF,
+        IFN_unstim = IFN,
+        TNFIFN_unstim = TNFIFN
+      ),
+    by = c("PID", "Compartment", "HIV_status", "Vacc_status")
+  ) %>%
+  filter(Stimulant != "Unstim") %>%
+  mutate(
+    TNF_minus_unstim    = pmax(TNF - TNF_unstim, 0.001),
+    IFN_minus_unstim    = pmax(IFN - IFN_unstim, 0.001),
+    TNFIFN_minus_unstim = pmax(TNFIFN - TNFIFN_unstim, 0.001),
+    CD4Total            = TNF_minus_unstim + IFN_minus_unstim + TNFIFN_minus_unstim
+  ) %>%
+  select(
+    PID, HIV_status, Compartment, Vacc_status, Stimulant,
+    TNF_minus_unstim, IFN_minus_unstim, TNFIFN_minus_unstim, CD4Total
+  ) %>%
+  mutate(across(where(is.numeric), ~ round(.x, 3)))
+
+plot_data4 <- CD4LCdf_1 %>%
+  filter(
+    Compartment %in% c("BAL", "BLOOD"),
+    HIV_status == "HIV-"
+  ) %>%
+  mutate(
+    Log_CD4Total = log10(CD4Total),
+    Stimulant = recode(
+      Stimulant,
+      "Spike P" = "WT Spike",
+      "NP" = "WT Nucleocapsid",
+      "PMA/Iono" = "PMA & Ionomycin"
+    ),
+    Compartment = recode(Compartment, "BLOOD" = "PB"),
+    Stimulant = factor(
+      Stimulant,
+      levels = c("PMA & Ionomycin", "WT Spike", "WT Nucleocapsid")
+    ),
+    Compartment = factor(
+      Compartment,
+      levels = c("BAL", "PB")
+    )
+  ) %>%
+  select(PID, HIV_status, Compartment, Vacc_status, Log_CD4Total, Stimulant)
+
+pvals <- plot_data4 %>%
+  group_by(Stimulant) %>%
+  wilcox_test(Log_CD4Total ~ Compartment) %>%
+  mutate(
+    p_label = ifelse(p < 0.001, "p < 0.001", sprintf("p = %.3f", p))
+  ) %>%
+  add_y_position(fun = "max", step.increase = 0.08)
+
+Fig3A <- ggplot(plot_data4, aes(x = Compartment, y = Log_CD4Total, fill = Compartment)) +
+  geom_boxplot(outlier.shape = NA, width = 0.6, alpha = 0.8) +
+  geom_jitter(width = 0.1, alpha = 0.5) +
+  facet_wrap(~Stimulant) +
+  stat_pvalue_manual(
+    pvals,
+    label = "p_label",
+    tip.length = 0,
+    size = 5
+  ) +
+  scale_fill_manual(values = c("BAL" = "#1b9e77", "PB" = "#7570b3")) +
+  labs(
+    title = "B.",
+    y = "Log10[Total CD4 T cell \n cytokine-producing cells]",
+    x = "Compartment"
+  ) +
+  coord_cartesian(
+    ylim = c(
+      min(plot_data4$Log_CD4Total, na.rm = TRUE),
+      max(pvals$y.position, na.rm = TRUE) + 0.1
+    )
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(size = 20, face = "bold", hjust = 0),
+    plot.title.position = "plot",
+    strip.text = element_text(face = "bold", size = 18),
+    axis.title = element_text(face = "bold", size = 18),
+    axis.text = element_text(size = 18),
+    panel.background = element_rect(fill = "white", colour = "black"),
+    panel.grid.major = element_line(color = "grey70", linewidth = 0.1),
+    panel.grid.minor = element_line(color = "grey85", linewidth = 0.08),
+    legend.position = "none"
+  )
+
+Fig3A
+plot_data4 %>%
+  group_by(Stimulant, Compartment) %>%
+  summarise(n = n_distinct(PID), .groups = "drop")
+
+# Figure 3B
+CD8LCdf <- read_csv("CD8TcellsAg.csv")
+
+CD8LCdf_1 <- CD8LCdf %>%
+  group_by(PID, Compartment, HIV_status, Vacc_status, Stimulant) %>%
+  summarise(
+    TNF    = mean(TNF, na.rm = TRUE),
+    IFN    = mean(IFN, na.rm = TRUE),
+    TNFIFN = mean(TNFIFN, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  left_join(
+    CD8LCdf %>%
+      group_by(PID, Compartment, HIV_status, Vacc_status, Stimulant) %>%
+      summarise(
+        TNF    = mean(TNF, na.rm = TRUE),
+        IFN    = mean(IFN, na.rm = TRUE),
+        TNFIFN = mean(TNFIFN, na.rm = TRUE),
+        .groups = "drop"
+      ) %>%
+      filter(Stimulant == "Unstim") %>%
+      transmute(
+        PID, Compartment, HIV_status, Vacc_status,
+        TNF_unstim = TNF,
+        IFN_unstim = IFN,
+        TNFIFN_unstim = TNFIFN
+      ),
+    by = c("PID", "Compartment", "HIV_status", "Vacc_status")
+  ) %>%
+  filter(Stimulant != "Unstim") %>%
+  mutate(
+    TNF_minus_unstim    = pmax(TNF - TNF_unstim, 0.001),
+    IFN_minus_unstim    = pmax(IFN - IFN_unstim, 0.001),
+    TNFIFN_minus_unstim = pmax(TNFIFN - TNFIFN_unstim, 0.001),
+    CD8Total            = TNF_minus_unstim + IFN_minus_unstim + TNFIFN_minus_unstim
+  ) %>%
+  select(
+    PID, HIV_status, Compartment, Vacc_status, Stimulant,
+    TNF_minus_unstim, IFN_minus_unstim, TNFIFN_minus_unstim, CD8Total
+  ) %>%
+  mutate(across(where(is.numeric), ~ round(.x, 3)))
+
+plot_data8 <- CD8LCdf_1 %>%
+  filter(
+    Compartment %in% c("BAL", "BLOOD"),
+    HIV_status == "HIV-"
+  ) %>%
+  mutate(
+    Log_CD8Total = log10(CD8Total),
+    Stimulant = recode(
+      Stimulant,
+      "Spike P" = "WT Spike",
+      "NP" = "WT Nucleocapsid",
+      "PMA/Iono" = "PMA & Ionomycin"
+    ),
+    Compartment = recode(Compartment, "BLOOD" = "PB"),
+    Stimulant = factor(Stimulant, levels = c("PMA & Ionomycin", "WT Spike", "WT Nucleocapsid")),
+    Compartment = factor(Compartment, levels = c("BAL", "PB"))
+  ) %>%
+  select(PID, HIV_status, Compartment, Vacc_status, Log_CD8Total, Stimulant)
+
+pvals <- plot_data8 %>%
+  group_by(Stimulant) %>%
+  wilcox_test(Log_CD8Total ~ Compartment) %>%
+  mutate(
+    p_label = ifelse(p < 0.001, "p < 0.001", sprintf("p = %.3f", p))
+  ) %>%
+  add_y_position(fun = "max", step.increase = 0.08)
+
+Fig3B <- ggplot(plot_data8, aes(x = Compartment, y = Log_CD8Total, fill = Compartment)) +
+  geom_boxplot(outlier.shape = NA, width = 0.6, alpha = 0.8) +
+  geom_jitter(width = 0.1, alpha = 0.5) +
+  facet_wrap(~Stimulant) +
+  stat_pvalue_manual(
+    pvals,
+    label = "p_label",
+    tip.length = 0,
+    size = 5
+  ) +
+  scale_fill_manual(values = c("BAL" = "#1b9e77", "PB" = "#7570b3")) +
+  labs(
+    title = "C.",
+    y = "Log10[Total CD8 T cell \n cytokine-producing cells]",
+    x = "Compartment"
+  ) +
+  coord_cartesian(ylim = c(min(plot_data8$Log_CD8Total, na.rm = TRUE), max(pvals$y.position, na.rm = TRUE) + 0.1)) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(size = 20, face = "bold", hjust = 0),
+    plot.title.position = "plot",
+    strip.text = element_text(face = "bold", size = 18),
+    axis.title = element_text(face = "bold", size = 18),
+    axis.text = element_text(size = 18),
+    panel.background = element_rect(fill = "white", colour = "black"),
+    panel.grid.major = element_line(color = "grey70", linewidth = 0.1),
+    panel.grid.minor = element_line(color = "grey85", linewidth = 0.08),
+    legend.position = "none"
+  )
+
+Fig3B
+plot_data8 %>%
+  group_by(Stimulant, Compartment) %>%
+  summarise(n = n_distinct(PID), .groups = "drop")
+
+
+#Figure 3C
+IgAIgGWHO_wide <- IgAIgGWHO_long %>%
+  rename(
+    PID = Sample_ID,
+    Stimulant = Antigens,
+    HIV_status = HIV_Status,
+    Vacc_status = Vacc_Status
+  ) %>%
+  mutate(
+    Compartment = recode(Compartment, Serum = "PB"),
+    Stimulant = recode(
+      Stimulant,
+      Nucleocapsid = "WT Nucleocapsid",
+      Wildtype = "WT Spike"
+    )
+  ) %>%
+  filter(Stimulant != "RBD", Compartment != "NLF") %>%
+  select(PID, Stimulant, Vacc_status, Log10_Value, Isotype, Compartment, HIV_status) %>%
+  pivot_wider(
+    names_from = Isotype,
+    values_from = Log10_Value,
+    names_glue = "{Isotype}Log10_Value"
+  )
+
+clean_keys <- \(df) {
+  df %>%
+    mutate(
+      PID = str_replace_all(PID, "\\s+", ""),
+      across(c(Vacc_status, HIV_status, Compartment, Stimulant), str_trim)
+    )
+}
+
+plot_data8_clean <- CD8LCdf_1 %>%
+  filter(Compartment %in% c("BAL", "BLOOD")) %>%
+  mutate(
+    Log_CD8Total = log10(CD8Total),
+    Stimulant = recode(
+      Stimulant,
+      "Spike P" = "WT Spike",
+      "NP" = "WT Nucleocapsid",
+      "PMA/Iono" = "PMA & Ionomycin"
+    ),
+    Compartment = recode(Compartment, "BLOOD" = "PB"),
+    HIV_status = recode(HIV_status, "HIV+ART>1Yr" = "HIV+"),
+    Stimulant = factor(Stimulant, levels = c("PMA & Ionomycin", "WT Spike", "WT Nucleocapsid")),
+    Compartment = factor(Compartment, levels = c("BAL", "PB"))
+  ) %>%
+  filter(Stimulant != "PMA & Ionomycin") %>%
+  select(PID, Stimulant, Vacc_status, Compartment, HIV_status, Log_CD8Total) %>%
+  clean_keys()
+
+plot_data4_clean <- CD4LCdf_1 %>%
+  filter(Compartment %in% c("BAL", "BLOOD")) %>%
+  mutate(
+    Log_CD4Total = log10(CD4Total),
+    Stimulant = recode(
+      Stimulant,
+      "Spike P" = "WT Spike",
+      "NP" = "WT Nucleocapsid",
+      "PMA/Iono" = "PMA & Ionomycin"
+    ),
+    Compartment = recode(Compartment, "BLOOD" = "PB"),
+    HIV_status = recode(HIV_status, "HIV+ART>1Yr" = "HIV+"),
+    Stimulant = factor(Stimulant, levels = c("PMA & Ionomycin", "WT Spike", "WT Nucleocapsid")),
+    Compartment = factor(Compartment, levels = c("BAL", "PB"))
+  ) %>%
+  filter(Stimulant != "PMA & Ionomycin") %>%
+  select(PID, Stimulant, Vacc_status, Compartment, HIV_status, Log_CD4Total) %>%
+  clean_keys()
+
+IgAIgGWHO_wide_clean <- IgAIgGWHO_wide %>%
+  clean_keys()
+
+combined_data <- list(
+  IgAIgGWHO_wide_clean,
+  plot_data4_clean,
+  plot_data8_clean
+) %>%
+  purrr::reduce(
+    full_join,
+    by = c("PID", "HIV_status", "Vacc_status", "Compartment", "Stimulant")
+  ) %>%
+  mutate(
+    Compartment = factor(Compartment, levels = c("BAL", "PB"))
+  )
+
+vars <- c("Log_CD4Total", "Log_CD8Total", "IgALog10_Value", "IgGLog10_Value")
+lab <- c(
+  Log_CD4Total   = "CD4",
+  Log_CD8Total   = "CD8",
+  IgALog10_Value = "IgA",
+  IgGLog10_Value = "IgG"
+)
+lvls <- unname(lab[vars])
+
+corr_long <- combined_data %>%
+  filter(HIV_status == "HIV-", Stimulant != "PMA & Ionomycin") %>%
+  group_by(Stimulant, Compartment) %>%
+  group_modify(~{
+    X <- as.matrix(select(.x, all_of(vars)))
+    n <- ncol(X)
+    r <- p <- matrix(NA_real_, n, n, dimnames = list(vars, vars))
+
+    for (i in 1:n) for (j in 1:n) {
+      if (i == j) {
+        r[i, j] <- 1
+        p[i, j] <- 0
+        next
+      }
+      ok <- is.finite(X[, i]) & is.finite(X[, j])
+      if (sum(ok) >= 3) {
+        ct <- suppressWarnings(cor.test(X[ok, i], X[ok, j], method = "spearman", exact = FALSE))
+        r[i, j] <- unname(ct$estimate)
+        p[i, j] <- ct$p.value
+      }
+    }
+
+    tibble(
+      var1 = rep(vars, each = n),
+      var2 = rep(vars, times = n),
+      r = c(r),
+      p = c(p)
+    )
+  }) %>%
+  ungroup() %>%
+  mutate(
+    var1 = factor(recode(var1, !!!lab), levels = lvls),
+    var2 = factor(recode(var2, !!!lab), levels = lvls),
+    sig = case_when(
+      is.na(p)   ~ "",
+      p < 0.001  ~ "***",
+      p < 0.01   ~ "**",
+      p < 0.05   ~ "*",
+      TRUE       ~ ""
+    ),
+    label = if_else(is.na(r), "", paste0(round(r, 2), "\n", sig)),
+    i = as.integer(var1),
+    j = as.integer(var2)
+  ) %>%
+  filter(i < j) %>%
+  distinct(Stimulant, Compartment, var1, var2, .keep_all = TRUE)
+
+Fig3C <- ggplot(corr_long, aes(var1, var2, fill = r)) +
+  geom_tile() +
+  geom_text(aes(label = na_if(label, "")), size = 5) +
+  scale_fill_gradient2(
+    limits = c(-1, 1),
+    midpoint = 0,
+    low = "#4575b4",
+    high = "#d73027",
+    na.value = "grey90"
+  ) +
+  coord_equal() +
+  labs(x = NULL, y = NULL, fill = "r", title = "D.") +
+  facet_grid(. ~ Compartment + Stimulant) +
+  theme_minimal(base_size = 18) +
+  theme(
+    plot.title = element_text(size = 20, face = "bold", hjust = 0),
+    plot.title.position = "plot",
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 16),
+    axis.text.y = element_text(size = 16),
+    strip.text = element_text(size = 16, face = "bold"),
+    legend.title = element_text(size = 16, face = "bold"),
+    legend.text = element_text(size = 16),
+    panel.background = element_rect(fill = "white", colour = "black"),
+    panel.grid.major = element_line(color = "grey70", linewidth = .1),
+    panel.grid.minor = element_line(color = "grey85", linewidth = .08)
+  )
+
+
+strip_margins <- theme(plot.margin = margin(0,0,0,0))
+
+A <- wrap_elements(full = Fig3A + strip_margins)
+B <- wrap_elements(full = Fig3B + strip_margins)
+C <- wrap_elements(full = Fig3C + strip_margins)
+
+# Import external FACS figure
+facs_img <- image_read("FACS.png") |>
+  image_trim()
+# Convert magick image to raster grob
+facs_grob <- grid::rasterGrob(
+  as.raster(facs_img),
+  width = grid::unit(1, "npc"),
+  height = grid::unit(1, "npc"),
+  interpolate = TRUE
+)
+
+# Convert to patchwork-compatible object
+FACS <- wrap_elements(full = facs_grob)
+# Assemble Figure 3
+Fig3 <- FACS /
+         (A + B) /
+         (C)+
+  plot_layout(
+    heights = c(1.3, 1, 1.3),
+    guides = "collect"
+  ) 
+Fig3
+
+ggsave("Figure3.png", Fig3, width = 17, height = 15, dpi = 300, bg = "white")
+
+datasetfig3 <-  combined_data %>%
+  select(PID, HIV_status, Vacc_status, Stimulant, Compartment,"Log_CD4Total", "Log_CD8Total", "IgALog10_Value", "IgGLog10_Value")
+write_csv(datasetfig3, "Fig3_data.csv")
+
+
+#| label: fig3-n
+#| include: false
+
+# ---------- Fig3A ----------
+fig3a_n <- plot_data4 %>%
+  group_by(Stimulant, Compartment) %>%
+  summarise(n = n_distinct(PID), .groups = "drop")
+
+n_fig3a_pma_bal   <- fig3a_n$n[fig3a_n$Stimulant == "PMA & Ionomycin"  & fig3a_n$Compartment == "BAL"]
+n_fig3a_pma_pb    <- fig3a_n$n[fig3a_n$Stimulant == "PMA & Ionomycin"  & fig3a_n$Compartment == "PB"]
+n_fig3a_spike_bal <- fig3a_n$n[fig3a_n$Stimulant == "WT Spike"         & fig3a_n$Compartment == "BAL"]
+n_fig3a_spike_pb  <- fig3a_n$n[fig3a_n$Stimulant == "WT Spike"         & fig3a_n$Compartment == "PB"]
+n_fig3a_np_bal    <- fig3a_n$n[fig3a_n$Stimulant == "WT Nucleocapsid"  & fig3a_n$Compartment == "BAL"]
+n_fig3a_np_pb     <- fig3a_n$n[fig3a_n$Stimulant == "WT Nucleocapsid"  & fig3a_n$Compartment == "PB"]
+
+# ---------- Fig3B ----------
+fig3b_n <- plot_data8 %>%
+  group_by(Stimulant, Compartment) %>%
+  summarise(n = n_distinct(PID), .groups = "drop")
+
+n_fig3b_pma_bal   <- fig3b_n$n[fig3b_n$Stimulant == "PMA & Ionomycin"  & fig3b_n$Compartment == "BAL"]
+n_fig3b_pma_pb    <- fig3b_n$n[fig3b_n$Stimulant == "PMA & Ionomycin"  & fig3b_n$Compartment == "PB"]
+n_fig3b_spike_bal <- fig3b_n$n[fig3b_n$Stimulant == "WT Spike"         & fig3b_n$Compartment == "BAL"]
+n_fig3b_spike_pb  <- fig3b_n$n[fig3b_n$Stimulant == "WT Spike"         & fig3b_n$Compartment == "PB"]
+n_fig3b_np_bal    <- fig3b_n$n[fig3b_n$Stimulant == "WT Nucleocapsid"  & fig3b_n$Compartment == "BAL"]
+n_fig3b_np_pb     <- fig3b_n$n[fig3b_n$Stimulant == "WT Nucleocapsid"  & fig3b_n$Compartment == "PB"]
+
+# ---------- Fig3C ----------
+fig3c_n <- combined_data %>%
+  filter(
+    HIV_status == "HIV-",
+    Stimulant != "PMA & Ionomycin"
+  ) %>%
+  drop_na(Log_CD4Total, Log_CD8Total, IgALog10_Value, IgGLog10_Value) %>%
+  group_by(Stimulant, Compartment) %>%
+  summarise(n = n_distinct(PID), .groups = "drop")
+
+n_fig3c_spike_bal <- fig3c_n$n[fig3c_n$Stimulant == "WT Spike"        & fig3c_n$Compartment == "BAL"]
+n_fig3c_spike_pb  <- fig3c_n$n[fig3c_n$Stimulant == "WT Spike"        & fig3c_n$Compartment == "PB"]
+n_fig3c_np_bal    <- fig3c_n$n[fig3c_n$Stimulant == "WT Nucleocapsid" & fig3c_n$Compartment == "BAL"]
+n_fig3c_np_pb     <- fig3c_n$n[fig3c_n$Stimulant == "WT Nucleocapsid" & fig3c_n$Compartment == "PB"]
+
+```
+
+![](Figure3.png){fig-align="center"}
+
+**Figure 3 \| Detection of SARS-CoV-2–specific T cell responses in systemic and mucosal compartments.**
+
+Bronchoalveolar cells (BAL) and peripheral blood (PB) collected from HIV-uninfected individuals were stained with fluorochrome-conjugated antibodies to identify IFN-γ and TNF-α producing CD4⁺ and CD8⁺ T cells following stimulation with SARS-Cov2 peptides (WT-spike and Nucleocapsid) and Phorbol 12-myristate 13-acetate and Ionomycin (PMA and Ionomycin). **a,** Representative flow cytometry plots. **b,c** Box plots comparing **b,** CD4⁺ and **c,** CD8⁺ T cell responses between BAL and PB following stimulation with PMA/ionomycin (BAL, n=32; PB, n=41), SARS-CoV-2 WT Spike (BAL, n=32; PB, n=41), and Nucleocapsid (BAL, n=30; PB, n=37) peptide pools. **d,** Correlograms depicting the relationships between SARS-CoV-2 WT Spike- and Nucleocapsid-specific CD4⁺ and CD8⁺ T cell responses, along with IgG and IgA binding antibody titers (BAL Spike, n=26; Nucleocapsid, n=24 and PB Spike, n=35; Nucleocapsid, n=31). Numeric values indicate Spearman’s correlation coefficients (r). Asterisks denote statistical significance (\*p ≤ 0.05, \*\*p ≤ 0.01, \*\*\*p ≤ 0.001). Data were log₁₀-transformed for statistical analysis and visualisation. Box plots represent the interquartile range (25th–75th percentiles), with the median indicated by the centre line. Whiskers extend to values within 1.5× the interquartile range, and points beyond the whiskers denote outliers. Statistical significance was assessed using two-sided Wilcoxon rank-sum tests (**b, c**) and Spearman’s rank correlation tests (**d**); p \< 0.05 was considered significant.
+
+Fig. 3A (CD4): PMA & Ionomycin BAL n=`r n_fig3a_pma_bal`, PB n=`r n_fig3a_pma_pb`; WT Spike BAL n=`r n_fig3a_spike_bal`, PB n=`r n_fig3a_spike_pb`; WT Nucleocapsid BAL n=`r n_fig3a_np_bal`, PB n=`r n_fig3a_np_pb`.
+
+Fig. 3B (CD8): PMA & Ionomycin BAL n=`r n_fig3b_pma_bal`, PB n=`r n_fig3b_pma_pb`; WT Spike BAL n=`r n_fig3b_spike_bal`, PB n=`r n_fig3b_spike_pb`; WT Nucleocapsid BAL n=`r n_fig3b_np_bal`, PB n=`r n_fig3b_np_pb`.
+
+Fig. 3C (complete paired measurements): WT Spike BAL n=`r n_fig3c_spike_bal`, PB n=`r n_fig3c_spike_pb`; WT Nucleocapsid BAL n=`r n_fig3c_np_bal`, PB n=`r n_fig3c_np_pb`.
+
+```{r}
+#| label: fig4-build
+#| include: false
+
+#Figure 4A
+plot_data4b <- CD4LCdf_1 %>%
+  filter(Compartment %in% c("BAL", "BLOOD")) %>%
+  mutate(
+    Log_CD4Total = log10(CD4Total),
+    Stimulant = recode(
+      Stimulant,
+      "Spike P" = "WT Spike",
+      "NP" = "WT Nucleocapsid",
+      "PMA/Iono" = "PMA & Ionomycin"
+    ),
+    HIV_status = recode(
+      HIV_status,
+      "HIV-" = "HIV-",
+      "HIV+ART>1Yr" = "HIV+"),
+    Compartment = recode(Compartment, "BLOOD" = "PB"),
+    Stimulant = factor(
+      Stimulant,
+      levels = c("PMA & Ionomycin", "WT Spike", "WT Nucleocapsid")
+    ),
+    Compartment = factor(
+      Compartment,
+      levels = c("BAL", "PB")
+    )
+  ) %>%
+  select(PID, HIV_status, Compartment, Vacc_status, Log_CD4Total, Stimulant)
+
+pvals4 <- plot_data4b %>%
+  group_by(Stimulant, Compartment) %>%
+  wilcox_test(Log_CD4Total ~ HIV_status) %>%
+  mutate(
+    p_label = ifelse(p < 0.001, "p < 0.001", sprintf("p = %.3f", p))
+  ) %>%
+  add_y_position(fun = "max", step.increase = 0.08)
+
+Fig4A <- ggplot(plot_data4b, aes(x = HIV_status, y = Log_CD4Total, fill = Compartment)) +
+  geom_boxplot(outlier.shape = NA, width = 0.6, alpha = 0.8) +
+  geom_jitter(width = 0.1, alpha = 0.5) +
+  facet_wrap(~Compartment + Stimulant, ncol = 3) +
+  stat_pvalue_manual(
+    pvals4,
+    label = "p_label",
+    tip.length = 0,
+    size = 5
+  ) +
+  scale_fill_manual(values = c("BAL" = "#1b9e77", "PB" = "#7570b3")) +
+  labs(
+    title = "A.",
+    y = "Log10[Total CD4 T cell cytokine-producing cells]",
+    x = "HIV status"
+  ) +
+  coord_cartesian(
+    ylim = c(
+      min(plot_data4b$Log_CD4Total, na.rm = TRUE),
+      max(pvals4$y.position, na.rm = TRUE) + 0.1
+    )
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(size = 20, face = "bold", hjust = 0),
+    plot.title.position = "plot",
+    strip.text = element_text(face = "bold", size = 18),
+    axis.title = element_text(face = "bold", size = 18),
+    axis.text = element_text(size = 18),
+    panel.background = element_rect(fill = "white", colour = "black"),
+    panel.grid.major = element_line(color = "grey70", linewidth = 0.1),
+    panel.grid.minor = element_line(color = "grey85", linewidth = 0.08),
+    legend.position = "none"
+  )
+
+
+# Figure 4B
+plot_data8b <- CD8LCdf_1 %>%
+  filter(Compartment %in% c("BAL", "BLOOD")) %>%
+  mutate(
+    Log_CD8Total = log10(CD8Total),
+    Stimulant = recode(
+      Stimulant,
+      "Spike P" = "WT Spike",
+      "NP" = "WT Nucleocapsid",
+      "PMA/Iono" = "PMA & Ionomycin"
+    ),
+    HIV_status = recode(
+      HIV_status,
+      "HIV-" = "HIV-",
+      "HIV+ART>1Yr" = "HIV+"),
+    Compartment = recode(Compartment, "BLOOD" = "PB"),
+    Stimulant = factor(
+      Stimulant,
+      levels = c("PMA & Ionomycin", "WT Spike", "WT Nucleocapsid")
+    ),
+    Compartment = factor(
+      Compartment,
+      levels = c("BAL", "PB")
+    )
+  ) %>%
+  select(PID, HIV_status, Compartment, Vacc_status, Log_CD8Total, Stimulant)
+
+pvals8 <- plot_data8b %>%
+  group_by(Stimulant, Compartment) %>%
+  wilcox_test(Log_CD8Total ~ HIV_status) %>%
+  mutate(
+    p_label = ifelse(p < 0.001, "p < 0.001", sprintf("p = %.3f", p))
+  ) %>%
+  add_y_position(fun = "max", step.increase = 0.08)
+
+Fig4B <- ggplot(plot_data8b, aes(x = HIV_status, y = Log_CD8Total, fill = Compartment)) +
+  geom_boxplot(outlier.shape = NA, width = 0.6, alpha = 0.8) +
+  geom_jitter(width = 0.1, alpha = 0.5) +
+  facet_wrap(~Compartment + Stimulant, ncol = 3) +
+  stat_pvalue_manual(
+    pvals8,
+    label = "p_label",
+    tip.length = 0,
+    size = 5
+  ) +
+  scale_fill_manual(values = c("BAL" = "#1b9e77", "PB" = "#7570b3")) +
+  labs(
+    title = "B.",
+    y = "Log10[Total CD8 T cell cytokine-producing cells]",
+    x = "HIV status"
+  ) +
+  coord_cartesian(
+    ylim = c(
+      min(plot_data8b$Log_CD8Total, na.rm = TRUE),
+      max(pvals8$y.position, na.rm = TRUE) + 0.1
+    )
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(size = 20, face = "bold", hjust = 0),
+    plot.title.position = "plot",
+    strip.text = element_text(face = "bold", size = 18),
+    axis.title = element_text(face = "bold", size = 18),
+    axis.text = element_text(size = 18),
+    panel.background = element_rect(fill = "white", colour = "black"),
+    panel.grid.major = element_line(color = "grey70", linewidth = 0.1),
+    panel.grid.minor = element_line(color = "grey85", linewidth = 0.08),
+    legend.position = "none"
+  )
+
+
+# Figure 4C
+plot_data4c <- CD4LCdf_1 %>%
+  filter(Compartment %in% c("BAL","BLOOD")) %>%
+  mutate(
+    Log_CD4Total = log10(CD4Total),
+    Stimulant = recode(
+      Stimulant,
+      "Spike P" = "WT Spike",
+      "NP" = "WT Nucleocapsid",
+      "PMA/Iono" = "PMA & Ionomycin"
+    ),
+    Compartment = recode(Compartment, "BLOOD" = "PB"),
+    HIV_status = recode (HIV_status, "HIV+ART>1Yr" = "HIV+")
+  ) %>%
+  filter(Stimulant %in% c("WT Spike","WT Nucleocapsid")) %>%
+  select(PID, HIV_status, Compartment, Stimulant, Log_CD4Total) %>%
+  pivot_wider(
+    names_from = Compartment,
+    values_from = Log_CD4Total
+  ) %>%
+  drop_na(BAL, PB)
+
+# Correlations
+corr4c <- plot_data4c %>%
+  group_by(Stimulant) %>%
+  summarise(
+    r = cor(BAL, PB, method = "spearman"),
+    p = cor.test(BAL, PB, method = "spearman", exact = FALSE)$p.value,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    p_label = ifelse(p < 0.001, "p < 0.001", sprintf("p = %.3f", p)),
+    label = paste0("r = ", round(r, 2), ", ", p_label)
+  )
+
+Fig4C <- ggplot(plot_data4c, aes(x = PB, y = BAL, colour = HIV_status)) +
+  geom_point(size = 3, alpha = 0.8) +
+  geom_smooth(method = "lm", se = FALSE, colour = "black") +
+  facet_wrap(~Stimulant) +
+  geom_text(
+    data = corr4c,
+    aes(x = -Inf, y = Inf, label = label),
+    inherit.aes = FALSE,
+    hjust = -0.1,
+    vjust = 1.5,
+    size = 6
+  ) +
+  scale_colour_manual(values = c("HIV-" = "#1f77b4", "HIV+" = "#d62728")) +
+  labs(
+    title = "C.",
+    x = "PB CD4 response (log10)",
+    y = "BAL CD4 response (log10)",
+    colour = "HIV status"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(size = 20, face = "bold", hjust = 0),
+    plot.title.position = "plot",
+    strip.text = element_text(face = "bold", size = 18),
+    axis.title = element_text(face = "bold", size = 18),
+    axis.text = element_text(size = 18),
+    legend.title = element_text(size = 16, face = "bold"),
+    legend.text = element_text(size = 16),
+    panel.background = element_rect(fill = "white", colour = "black"),
+    panel.grid.major = element_line(color = "grey70", linewidth = 0.1),
+    panel.grid.minor = element_line()
+  )
+
+
+# Figure 4D
+plot_data8d <- CD8LCdf_1 %>%
+  filter(Compartment %in% c("BAL","BLOOD")) %>%
+  mutate(
+    Log_CD8Total = log10(CD8Total),
+    Stimulant = recode(
+      Stimulant,
+      "Spike P" = "WT Spike",
+      "NP" = "WT Nucleocapsid",
+      "PMA/Iono" = "PMA & Ionomycin"
+    ),
+    Compartment = recode(Compartment, "BLOOD" = "PB"),
+    HIV_status = recode (HIV_status, "HIV+ART>1Yr" = "HIV+")
+  ) %>%
+  filter(Stimulant %in% c("WT Spike","WT Nucleocapsid")) %>%
+  select(PID, HIV_status, Compartment, Stimulant, Log_CD8Total) %>%
+  pivot_wider(
+    names_from = Compartment,
+    values_from = Log_CD8Total
+  ) %>%
+  drop_na(BAL, PB)
+
+# Correlations
+corr8d <- plot_data8d %>%
+  group_by(Stimulant) %>%
+  summarise(
+    r = cor(BAL, PB, method = "spearman"),
+    p = cor.test(BAL, PB, method = "spearman", exact = FALSE)$p.value,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    p_label = ifelse(p < 0.001, "p < 0.001", sprintf("p = %.3f", p)),
+    label = paste0("r = ", round(r, 2), ", ", p_label)
+  )
+
+Fig4D <- ggplot(plot_data8d, aes(x = PB, y = BAL, colour = HIV_status)) +
+  geom_point(size = 3, alpha = 0.8) +
+  geom_smooth(method = "lm", se = FALSE, colour = "black") +
+  facet_wrap(~Stimulant) +
+  geom_text(
+    data = corr8d,
+    aes(x = -Inf, y = Inf, label = label),
+    inherit.aes = FALSE,
+    hjust = -0.1,
+    vjust = 1.5,
+    size = 6
+  ) +
+  scale_colour_manual(values = c("HIV-" = "#1f77b4", "HIV+" = "#d62728")) +
+  labs(
+    title = "D.",
+    x = "PB CD8 response (log10)",
+    y = "BAL CD8 response (log10)",
+    colour = "HIV status"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(size = 20, face = "bold", hjust = 0),
+    plot.title.position = "plot",
+    strip.text = element_text(face = "bold", size = 18),
+    axis.title = element_text(face = "bold", size = 18),
+    axis.text = element_text(size = 18),
+    legend.title = element_text(size = 16, face = "bold"),
+    legend.text = element_text(size = 16),
+    panel.background = element_rect(fill = "white", colour = "black"),
+    panel.grid.major = element_line(color = "grey70", linewidth = 0.1),
+    panel.grid.minor = element_line ()
+  )
+
+
+
+
+
+
+
+strip_margins <- theme(plot.margin = margin(0,0,0,0))
+
+A <- wrap_elements(full = Fig4A + strip_margins)
+B <- wrap_elements(full = Fig4B + strip_margins)
+C <- wrap_elements(full = Fig4C + strip_margins)
+D <- wrap_elements(full = Fig4D + strip_margins)
+
+Fig4 <- (A + B) /
+        (C + D) +
+  plot_layout(
+    widths = c(1, 1),
+    heights = c(1, 0.5),
+    guides = "collect"
+  ) 
+
+ggsave("Figure4.png", Fig4, width = 16, height = 14, dpi = 300, bg = "white")
+
+
+#| label: fig4-n
+#| include: false
+
+# ---------- Fig4A (CD4 HIV comparison) ----------
+fig4a_n <- plot_data4b %>%
+  group_by(Stimulant, Compartment, HIV_status) %>%
+  summarise(n = n_distinct(PID), .groups = "drop")
+
+# ---------- Fig4B (CD8 HIV comparison) ----------
+fig4b_n <- plot_data8b %>%
+  group_by(Stimulant, Compartment, HIV_status) %>%
+  summarise(n = n_distinct(PID), .groups = "drop")
+
+# ---------- Fig4C (paired BAL–PB correlations) ----------
+fig4c_n <- plot_data4c %>%
+  group_by(Stimulant) %>%
+  summarise(n = n_distinct(PID), .groups = "drop")
+
+
+
+plot_data8bB  <- plot_data8b %>%
+  select(PID, Stimulant, Compartment, HIV_status)
+write_csv(plot_data8bB, "Fig4B_data.csv")
+
+```
+
+![](Figure4.png){width="100%" fig-align="center"}
+
+**Figure 4 \| Comparable SARS-CoV-2–specific T cell responses between ART-treated people with HIV (PWH) and HIV-uninfected individuals across systemic and mucosal compartments.**
+
+SARS-CoV-2–specific CD4⁺ and CD8⁺ T cell responses from vaccinated and unvaccinated adults were compared between PWH and HIV-uninfected individuals in bronchoalveolar lavage and peripheral blood samples. **a,b,** Box plots comparing **a,** CD4⁺ and **b,** CD8⁺ T cell responses between PWH and HIV-uninfected adults following stimulation with PMA/ionomycin, SARS-CoV-2 WT Spike, and Nucleocapsid peptide pools in BAL and PB of vaccinated and unvaccinated individuals (HIV-, n=32; HIV+, n=17). **c, d** Correlation plots showing the relationship between peripheral blood (PB) and bronchoalveolar lavage (BAL) SARS-CoV-2 wildtype (WT) spike– and WT nucleocapsid–specific CD4^+^ and CD8^+^ T cell responses (n=48). Box plots represent the interquartile range (25th–75th percentiles), with the median indicated by the centre line. Whiskers extend to values within 1.5× the interquartile range, and points beyond the whiskers denote outliers. Data in panels **a–b** were log₁₀-transformed for statistical analysis and visualisation. Statistical significance was assessed using two-sided Wilcoxon rank-sum tests (**a,b**) and Spearman’s rank correlation tests (**c,d**); P \< 0.05 was considered significant.
+
+Fig. 4A: WT Spike BAL HIV− (n=`r fig4a_n$n[fig4a_n$Stimulant=="WT Spike" & fig4a_n$Compartment=="BAL" & fig4a_n$HIV_status=="HIV-"]`), HIV+ (n=`r fig4a_n$n[fig4a_n$Stimulant=="WT Spike" & fig4a_n$Compartment=="BAL" & fig4a_n$HIV_status=="HIV+"]`).
+
+Fig. 4B: WT Spike BAL HIV− (n=`r fig4b_n$n[fig4b_n$Stimulant=="WT Spike" & fig4b_n$Compartment=="BAL" & fig4b_n$HIV_status=="HIV-"]`), HIV+ (n=`r fig4b_n$n[fig4b_n$Stimulant=="WT Spike" & fig4b_n$Compartment=="BAL" & fig4b_n$HIV_status=="HIV+"]`).
+
+Fig. 4C: WT Spike paired BAL–PB correlation (n=`r fig4c_n$n[fig4c_n$Stimulant=="WT Spike"]`).
+
+# **SARS-CoV-2–specific T cells exhibit compartment-specific phenotypic divergence**
+
+To further characterise compartmental divergence, we performed phenotypic profiling of Spike- and Nucleocapsid-specific CD4⁺ and CD8⁺ T cells from BAL and blood, pooling data across vaccination and HIV status.
+
+**A.**
+
+![](images/Figure%205B-02.png)
+
+**B.**
+
+![](images/Figure%205A-02.png)
+
+**Figure 5 \| Phenotypic profiles of SARS-CoV-2–specific T cells across systemic and mucosal compartments.**
+
+Scatter plots, bar graphs and heatmaps showing the distribution of WT SARS-CoV-2 Spike- and Nucleocapsid-specific CD4⁺ and CD8⁺ T cells in bronchoalveolar lavage samples, pooled across HIV and vaccination status. **a,** WT SARS-CoV-2 Nucleocapsid and Spike-specific CD4⁺ T cells (S BAL n = 55, PB n = 65; NP BAL n = 54, PB n = 61). **b,** WT SARS-CoV-2 Nucleocapsid and Spike-specific CD8⁺ T cells (S BAL n = 55, PB n = 65; NP BAL n = 54, PB n = 61). Asterisks denote statistical significance (\*p ≤ 0.05, \*\*p ≤ 0.01, \*\*\*p ≤ 0.001). Data are presented as median and interquartile range (IQR), with the bar denoting median. The heatmap denotes the contribution of each specific marker combination to the total response. Statistical analyses were performed using two-sided Wilcoxon rank-sum tests and Spearman’s rank correlation tests; P \< 0.05 was considered significant.
+
+Spike, PB n=65, BAL n =55; NP, PB n=61, BAL n =54; PMA/Ionomycin, PB n=65, BAL n =55
+
+# **Serum and mucosal correlates of potential anti-SARS-CoV-2 neutralising immunity vary across the upper and lower airway compartments**
+
+Antibody-mediated neutralisation is a key mechanism of protection against SARS-CoV-2 infection. Given the observed compartmentalisation of humoral and cellular responses, we next sought to identify immunological markers most strongly associated with functional antibody activity, particularly antibody-mediated neutralisation, in the upper and lower respiratory tract. Because direct neutralisation assays in BAL were not feasible due to dilutional constraints, BAL anti-Spike IgG was used as a surrogate marker of neutralisation potential in the lower respiratory tract, supported by its strong correlation with serum neutralising activity. In the URT, NLF ACE2 inhibition served as the neutralisation capacity readout. We used median across the variants as a measure of breadth.
+
+```{r}
+#| label: tbl-compartment-regression 
+#| tbl-cap: "Multivariable regression models of compartmental antibody responses."
+#| echo: false
+
+# Build long dataset
+Neut_combined3 <- lungcovid %>%
+  select(
+    Sample_ID, Antigens, Vacc_Status, HIV_Status, Sex, Age,
+    IgALogNasosorption, IgALogSerum, IgALogBAL,
+    IgGLogNasosorption, IgGLogSerum, IgGLogBAL,
+    SerumInh, NasosorptionInh
+  ) %>%
+  mutate(
+    Antigens = factor(Antigens, levels = c("Alpha", "Beta", "Gamma", "Omicron", "Delta", "Wildtype"))
+  ) %>%
+  pivot_longer(
+    cols = c(
+      IgALogNasosorption, IgALogSerum, IgALogBAL,
+      IgGLogNasosorption, IgGLogSerum, IgGLogBAL
+    ),
+    names_to = "Measurement",
+    values_to = "Log10_Value"
+  ) %>%
+  mutate(
+    Isotype = str_extract(Measurement, "Ig[AG]"),
+    Compartment = case_when(
+      str_detect(Measurement, "Nasosorption") ~ "NLF",
+      str_detect(Measurement, "Serum") ~ "Serum",
+      str_detect(Measurement, "BAL") ~ "BAL",
+      TRUE ~ NA_character_
+    ),
+    Neutralization = case_when(
+      Compartment == "Serum" ~ SerumInh,
+      Compartment == "NLF" ~ NasosorptionInh,
+      TRUE ~ NA_real_
+    ),
+    Log10_Value = if_else(Isotype == "IgA", Log10_Value - 1, Log10_Value)
+  ) %>%
+  select(-Measurement, -SerumInh, -NasosorptionInh)
+
+# Summarise antibody predictors per participant
+lung_summary <- Neut_combined3 %>%
+  filter(!is.na(Log10_Value)) %>%
+  group_by(Sample_ID, Sex, Age, HIV_Status, Vacc_Status) %>%
+  summarise(
+    BAL_IgG   = median(Log10_Value[Isotype == "IgG" & Compartment == "BAL"], na.rm = TRUE),
+    BAL_IgA   = median(Log10_Value[Isotype == "IgA" & Compartment == "BAL"], na.rm = TRUE),
+    Serum_IgG = median(Log10_Value[Isotype == "IgG" & Compartment == "Serum"], na.rm = TRUE),
+    Serum_IgA = median(Log10_Value[Isotype == "IgA" & Compartment == "Serum"], na.rm = TRUE),
+    NLF_IgG   = median(Log10_Value[Isotype == "IgG" & Compartment == "NLF"], na.rm = TRUE),
+    NLF_IgA   = median(Log10_Value[Isotype == "IgA" & Compartment == "NLF"], na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Summarise neutralization per participant
+serum_neut <- Neut_combined3 %>%
+  filter(Compartment %in% c("Serum", "NLF")) %>%
+  group_by(Sample_ID, Compartment) %>%
+  summarise(
+    Neutralization = median(Neutralization, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(
+    names_from = Compartment,
+    values_from = Neutralization,
+    names_glue = "{Compartment}_Neutralization"
+  )
+
+# Merge analysis dataset
+regression_df <- lung_summary %>%
+  left_join(serum_neut, by = "Sample_ID") %>%
+  drop_na(Serum_Neutralization)
+
+# Standardize continuous variables
+regression_df_std <- regression_df %>%
+  mutate(across(
+    c(BAL_IgG, BAL_IgA, Serum_IgG, Serum_IgA, NLF_IgG, NLF_IgA,
+      Serum_Neutralization, NLF_Neutralization, Age),
+    ~ as.numeric(scale(.))
+  ))
+
+model_NLF <- lm(
+  NLF_Neutralization ~
+    NLF_IgA + NLF_IgG +
+    Serum_IgG + Serum_IgA +
+    BAL_IgG + BAL_IgA +
+    Age + Sex + HIV_Status + Vacc_Status,
+  data = regression_df_std
+)
+
+model_serum <- lm(
+  Serum_Neutralization ~
+    Serum_IgG + Serum_IgA +
+    BAL_IgG + BAL_IgA +
+    NLF_IgG + NLF_IgA +
+    Age + Sex + HIV_Status + Vacc_Status,
+  data = regression_df_std
+)
+
+model_BAL <- lm(
+  BAL_IgG ~
+    Serum_Neutralization + NLF_Neutralization +
+    Serum_IgG + Serum_IgA +
+    BAL_IgA +
+    NLF_IgG + NLF_IgA +
+    Age + Sex + HIV_Status + Vacc_Status,
+  data = regression_df_std
+)
+
+# Extract model summaries
+tbl_NLF <- tidy(model_NLF, conf.int = TRUE) %>%
+  mutate(
+    NLF = sprintf("%.2f (%.2f, %.2f)", estimate, conf.low, conf.high),
+    p_NLF = ifelse(p.value < 0.001, "<0.001", sprintf("%.3f", p.value))
+  ) %>%
+  select(term, estimate, p.value, NLF, p_NLF)
+
+tbl_serum <- tidy(model_serum, conf.int = TRUE) %>%
+  mutate(
+    Serum = sprintf("%.2f (%.2f, %.2f)", estimate, conf.low, conf.high),
+    p_Serum = ifelse(p.value < 0.001, "<0.001", sprintf("%.3f", p.value))
+  ) %>%
+  select(term, estimate, p.value, Serum, p_Serum)
+
+tbl_BAL <- tidy(model_BAL, conf.int = TRUE) %>%
+  mutate(
+    BAL = sprintf("%.2f (%.2f, %.2f)", estimate, conf.low, conf.high),
+    p_BAL = ifelse(p.value < 0.001, "<0.001", sprintf("%.3f", p.value))
+  ) %>%
+  select(term, estimate, p.value, BAL, p_BAL)
+
+# Keep only formatted columns and merge
+table_all <- full_join(
+  tbl_NLF %>% select(term, NLF, p_NLF),
+  tbl_serum %>% select(term, Serum, p_Serum),
+  by = "term"
+) %>%
+  full_join(
+    tbl_BAL %>% select(term, BAL, p_BAL),
+    by = "term"
+  ) %>%
+  filter(term != "(Intercept)") %>%
+  mutate(
+    Predictor = case_when(
+      term == "Age" ~ "Age",
+      term == "SexM" ~ "Sex (Male)",
+      term == "HIV_StatusHIV+" ~ "HIV+ status",
+      term == "Vacc_StatusVaccinated" ~ "Vaccinated",
+      term == "Serum_IgG" ~ "Serum IgG",
+      term == "Serum_IgA" ~ "Serum IgA",
+      term == "BAL_IgG" ~ "BAL IgG",
+      term == "BAL_IgA" ~ "BAL IgA",
+      term == "NLF_IgG" ~ "NLF IgG",
+      term == "NLF_IgA" ~ "NLF IgA",
+      term == "Serum_Neutralization" ~ "Serum neutralization",
+      term == "NLF_Neutralization" ~ "NLF neutralization",
+      TRUE ~ term
+    ),
+    Group = case_when(
+      Predictor %in% c("Age", "Sex (Male)", "HIV+ status", "Vaccinated") ~ "Participant characteristics",
+      Predictor %in% c("Serum neutralization", "Serum IgG", "Serum IgA") ~ "Systemic markers",
+      Predictor %in% c("BAL IgG", "BAL IgA") ~ "Lower airway markers",
+      Predictor %in% c("NLF neutralization", "NLF IgG", "NLF IgA") ~ "Upper airway markers",
+      TRUE ~ "Other"
+    )
+  ) %>%
+  select(Group, Predictor, NLF, p_NLF, Serum, p_Serum, BAL, p_BAL)
+
+# Logical order
+row_order <- c(
+  "Age", "Sex (Male)", "HIV+ status", "Vaccinated",
+  "Serum neutralization", "Serum IgG", "Serum IgA",
+  "BAL IgG", "BAL IgA",
+  "NLF neutralization", "NLF IgG", "NLF IgA"
+)
+
+table_all <- table_all %>%
+  slice(match(row_order, Predictor))
+
+# Replace NAs with dash for cleaner reading
+table_all <- table_all %>%
+  mutate(across(c(NLF, p_NLF, Serum, p_Serum, BAL, p_BAL), ~ ifelse(is.na(.), "—", .)))
+
+# Build clearer gt table
+final_gt <- table_all %>%
+  gt(groupname_col = "Group") %>%
+  cols_label(
+    Predictor = "Predictor",
+    NLF = "NLF neutralization\nβ (95% CI)",
+    p_NLF = "p",
+    Serum = "Serum neutralization\nβ (95% CI)",
+    p_Serum = "p",
+    BAL = "BAL IgG\nβ (95% CI)",
+    p_BAL = "p"
+  ) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_body(
+      columns = c(NLF, p_NLF),
+      rows = p_NLF %in% c("<0.001", "0.009", "0.039", "0.048")
+    )
+  ) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_body(
+      columns = c(Serum, p_Serum),
+      rows = p_Serum %in% c("<0.001")
+    )
+  ) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_body(
+      columns = c(BAL, p_BAL),
+      rows = p_BAL %in% c("<0.001", "0.037", "0.039")
+    )
+  ) %>%
+  tab_source_note(
+    source_note = paste0(
+      "Multivariable linear regression models fitted on n = ",
+      nrow(regression_df_std),
+      " participants. β values are standardized coefficients."
+    )
+  ) %>%
+  tab_options(
+    table.font.size = 12,
+    data_row.padding = px(4)
+  )
+
+final_gt <- final_gt %>%
+  tab_style(
+    style = cell_borders(
+      sides = "left",
+      color = "grey60",
+      weight = px(1.5)
+    ),
+    locations = cells_body(columns = NLF)
+  ) %>%
+  tab_style(
+    style = cell_borders(
+      sides = "left",
+      color = "grey60",
+      weight = px(1.5)
+    ),
+    locations = cells_column_labels(columns = NLF)
+  ) %>%
+  tab_style(
+    style = cell_borders(
+      sides = "right",
+      color = "grey60",
+      weight = px(1.5)
+    ),
+    locations = cells_body(columns = c(p_NLF, p_Serum))
+  ) %>%
+  tab_style(
+    style = cell_borders(
+      sides = "right",
+      color = "grey60",
+      weight = px(1.5)
+    ),
+    locations = cells_column_labels(columns = c(p_NLF, p_Serum))
+  )
+
+final_gt
+
+```
+
+*Table 2. Multivariable linear regression models of compartmental antibody responses. Models were fitted on n = `r nrow(regression_df_std)` participants with complete measurements. β values represent standardized regression coefficients; bold values indicate p \< 0.05.*
