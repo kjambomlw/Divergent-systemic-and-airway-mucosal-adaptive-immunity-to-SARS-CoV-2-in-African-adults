@@ -29,12 +29,14 @@ pacman::p_load(
 
 ```{r}
 #Load data
-icloud_path <- "~/Library/Mobile Documents/com~apple~CloudDocs/Rprojects"
+icloud_path <- "~/Library/Mobile Documents/com~apple~CloudDocs/Rprojects/lungcovid"
 if (!dir.exists(icloud_path)) {
   dir.create(icloud_path, recursive = TRUE)  
 }
 
 setwd(icloud_path)
+
+
 
 #Dataset 1
 lungcovid <- read_csv("merged_data_lungcovid.csv")
@@ -53,9 +55,12 @@ lungcovid_corrected <- lungcovid %>%
     across(
       matches("IgA.*Log") & !contains("Nasosorption"),
       ~ . - 1
-    ),
-    HIV_Status = if_else(Sample_ID == "DEI110", "HIV+", HIV_Status)
-  )
+    ), HIV_Status = case_when(
+      Sample_ID == "DEI110" ~ "HIV+",
+      Sample_ID == "DEI11N" ~ "HIV-",
+      Sample_ID == "DEI13V" ~ "HIV-",
+      TRUE ~ HIV_Status
+    ))
 
 write_csv(lungcovid_corrected, "lungcovid04032026.csv")
 alldf <- read_csv("lungcovid04032026.csv")
@@ -66,10 +71,11 @@ IgAIgGWHO_long <- read_csv("bindingAbdata.csv") %>%
   mutate(
   Log10_Value = if_else(Isotype == "IgA", Log10_Value - 1, Log10_Value),
   HIV_Status = case_when(
-    Sample_ID == "DEI110" ~ "HIV+",
-    TRUE ~ HIV_Status
-  )
-)
+      Sample_ID == "DEI110" ~ "HIV+",
+      Sample_ID == "DEI11N" ~ "HIV-",
+      Sample_ID == "DEI13V" ~ "HIV-",
+      TRUE ~ HIV_Status
+    ))
 
 write_csv(IgAIgGWHO_long, "bindingAbdata04032026.csv")
 
@@ -78,29 +84,29 @@ write_csv(IgAIgGWHO_long, "bindingAbdata04032026.csv")
 demographics<- read_csv("Lung COVID metadata 4.1.csv")
 
 
-newdf1 <- read_csv("Fig4B_data.csv")
-newdf2 <- read_csv("Fig2C_data.csv")
-newdf3 <- read_csv("Fig2B_data.csv")
+#newdf1 <- read_csv("Fig4B_data.csv")
+#newdf2 <- read_csv("Fig2C_data.csv")
+#newdf3 <- read_csv("Fig2B_data.csv")
 
-merged_ids <- bind_rows(
-  newdf1 %>%
-    transmute(
-      PID = PID,
-      HIV_status = HIV_status
-    ),
-  newdf3 %>%
-    transmute(
-      PID = Sample_ID,
-      HIV_status = HIV_Status
-    )
-) %>%
-  mutate(
-    PID = stringr::str_replace_all(PID, "\\s+", ""),
-    HIV_status = stringr::str_trim(HIV_status)
-  ) %>%
-  distinct(PID, .keep_all = TRUE)
+#merged_ids <- bind_rows(
+ # newdf1 %>%
+  #  transmute(
+   #   PID = PID,
+    #  HIV_status = HIV_status
+  #  ),
+  #newdf3 %>%
+   # transmute(
+    #  PID = Sample_ID,
+     # HIV_status = HIV_Status
+    #)
+#) %>%
+ # mutate(
+  #  PID = stringr::str_replace_all(PID, "\\s+", ""),
+   # HIV_status = stringr::str_trim(HIV_status)
+  #) %>%
+  #distinct(PID, .keep_all = TRUE)
 
-write_csv(merged_ids, "merged_PID_HIVstatus2.csv")
+#write_csv(merged_ids, "merged_PID_HIVstatus2.csv")
 
 
 # Custom color-blind friendly palettes
@@ -759,7 +765,7 @@ n_fig1e_wt_nlf_igg   <- fig1e_wt_n$n[fig1e_wt_n$Compartment == "NLF"   & fig1e_w
 
 **Figure 1 \| SARS-CoV-2–specific binding antibody responses in systemic and mucosal compartments.**
 
-Serum, bronchoalveolar lavage (BAL), nasal lining fluid (NLF) from COVID-19 unvaccinated HIV-uninfected adults were analysed for IgG and IgA antibody responses against SARS-CoV-2 Spike wildtype and variants of concern (VOCs), including Alpha, Beta, Delta, Gamma and Omicron. Antibody titres were quantified using a multiplex MSD assay, and ACE2–Spike binding inhibition was measured using a surrogate neutralisation assay. **a,** Box plots comparing WT SARS-CoV-2 Spike-, Receptor Binding Domain (RBD)- and Nucleocapsid-specific IgG and IgA antibody concentrations in serum, BAL, and NLF (n=41). Antibody concentrations are expressed as WHO binding antibody units (BAU ml⁻¹). Dotted orange line represents cut-off for seropositivity. **b,** Box plots showing the breadth of IgG and IgA antibody responses against SARS-CoV-2 Wildtype, Alpha, Beta, Delta, Gamma and Omicron variants in serum, BAL and NLF (n=41). **c,** Correlogram depicting relationships between IgG and IgA binding antibody titres against Wildtype, Beta, Delta and Omicron variants across serum, BAL and NLF (n = 41) samples. Numeric values indicate Spearman’s correlation coefficients (r). Asterisks denote statistical significance (\*P ≤ 0.05, \*\*P ≤ 0.01, \*\*\*P ≤ 0.001). **d,** Box plots showingACE2–Spike binding inhibition activity (%) in serum and NLF against SARS-CoV-2 Wildtype, Alpha, Beta, Delta, Gamma and Omicron variants (n=41). **e,** Scatter plots showing correlations between ACE2–Spike binding inhibition activity (%) and IgG and IgA antibody titres against SARS-CoV-2 Wildtype, Alpha, Beta, Delta, Gamma and Omicron variants in serum and NLF (n = 41).Data in panels **a, b, c** and **e** were log₁₀-transformed for statistical analysis and visualisation. Box plots show the interquartile range (25th–75th percentiles), with the median indicated by a horizontal line. Whiskers extend to values within 1.5× the interquartile range, and points beyond this range represent outliers. Statistical significance was assessed using two-sided Wilcoxon rank-sum tests (**a, b, d**) and Spearman’s rank correlation tests (**c, e**); p \< 0.05 was considered significant. p values were adjusted for multiple comparisons within each figure panel using the Benjamini-Hochberg false discovery rate (FDR) method.
+Serum, bronchoalveolar lavage (BAL), and nasal lining fluid (NLF) from HIV-uninfected adults were analysed for IgG and IgA antibody responses against SARS-CoV-2 Spike wildtype and variants of concern (VOCs), including Alpha, Beta, Delta, Gamma and Omicron. Antibody titres were quantified using a multiplex MSD assay, and ACE2–Spike binding inhibition was measured using a surrogate neutralisation assay. **a,** Box plots comparing WT SARS-CoV-2 Spike-, Receptor Binding Domain (RBD)- and Nucleocapsid-specific IgG and IgA antibody concentrations in serum, BAL, and NLF (n = 41). Antibody concentrations are expressed as WHO binding antibody units (BAU ml⁻¹). **b,** Box plots showing the breadth of IgG and IgA antibody responses against SARS-CoV-2 wildtype, Alpha, Beta, Delta, Gamma and Omicron variants in serum, BAL and NLF (n = 43). **c,** Correlogram depicting relationships between IgG and IgA binding antibody titres against wildtype, Beta, Delta and Omicron variants across serum, BAL and NLF (n = 43) samples. Numeric values indicate Spearman’s correlation coefficients (r). Asterisks denote statistical significance (\*P ≤ 0.05, \*\*P ≤ 0.01, \*\*\*P ≤ 0.001). **d,** Box plots showing ACE2–Spike binding inhibition activity (%) in serum and NLF against SARS-CoV-2 wildtype, Alpha, Beta, Delta, Gamma and Omicron variants (n = 43). **e,** Scatter plots showing correlations between ACE2–Spike binding inhibition activity (%) and IgG and IgA antibody titres against SARS-CoV-2 wildtype, Alpha, Beta, Delta, Gamma and Omicron variants in serum and NLF (n = 43). Data in panels **a, b, c** and **e** were log₁₀-transformed for statistical analysis and visualisation. Box plots show the interquartile range (25th–75th percentiles), with the median indicated by a horizontal line. Whiskers extend to values within 1.5× the interquartile range, and points beyond this range represent outliers. Statistical significance was assessed using two-sided Wilcoxon rank-sum tests (**a, b, d**) and Spearman’s rank correlation tests (**c, e**); p \< 0.05 was considered significant. p values were adjusted for multiple comparisons within each figure panel using the Benjamini-Hochberg false discovery rate (FDR) method.
 
 Fig. 1A (WT): serum IgA n=`r n_fig1a_wt_serum_iga`, serum IgG n=`r n_fig1a_wt_serum_igg`, BAL IgA n=`r n_fig1a_wt_bal_iga`, BAL IgG n=`r n_fig1a_wt_bal_igg`, NLF IgA n=`r n_fig1a_wt_nlf_iga`, NLF IgG n=`r n_fig1a_wt_nlf_igg`.
 
@@ -1048,21 +1054,13 @@ n_fig2c_wt_serum_hivpos <- fig2c_wt_n$n[fig2c_wt_n$Compartment == "Serum" & fig2
 n_fig2c_wt_nlf_hivneg   <- fig2c_wt_n$n[fig2c_wt_n$Compartment == "NLF"   & fig2c_wt_n$HIV_Status == "HIV-"]
 n_fig2c_wt_nlf_hivpos   <- fig2c_wt_n$n[fig2c_wt_n$Compartment == "NLF"   & fig2c_wt_n$HIV_Status == "HIV+"]
 
-
-wt_data2ab  <- dfNT %>%
-  select(Sample_ID, Antigens, Compartment, HIV_Status)
-write_csv(wt_data2ab, "Fig2C_data.csv")
-
-wt_data2abc  <- wt_data3  %>%
-  select(Sample_ID, Antigens, Compartment, HIV_Status)
-write_csv(wt_data2abc, "Fig2B_data.csv")
 ```
 
 ![](Figure2.png){width="100%" fig-align="center"}
 
 **Figure 2 \| Comparable SARS-CoV-2–specific antibody responses and ACE2 inhibition between ART-treated people with HIV (PWH) and HIV-uninfected individuals across systemic and mucosal compartments.**
 
-SARS-CoV-2 Spike–specific IgG and IgA binding antibody titres and ACE2–Spike binding inhibition activity were compared between PWH and HIV-uninfected individuals in serum, nasal lining fluid (NLF) and bronchoalveolar lavage (BAL) samples against Wildtype, Alpha, Beta, Delta, Gamma and Omicron variants. Antibody titres were quantified using a multiplex MSD assay, and ACE2–Spike binding inhibition was measured using a surrogate neutralisation assay. **a,** Box plots comparing SARS-CoV-2 WT Spike-, RBD- and Nucleocapsid–specific IgA antibody concentrations between PWH and HIV-uninfected individuals. Results are expressed as WHO binding antibody units (BAU ml⁻¹), across systemic and mucosal compartments (HIV-, n = 41, HIV+, n =47). **b,** Box plots comparing SARS-CoV-2 WT Spike-, RBD- and Nucleocapsid–specific IgG antibody concentrations between PWH and HIV-uninfected individuals. Results are expressed as WHO binding antibody units (BAU ml⁻¹), across systemic and mucosal compartments (HIV-, n =41, HIV+, n = 47). Dotted orange line represents cut-off for seropositivity. **c**, Box plots comparing ACE2–Spike binding inhibition activity (%) against wildtype and VOCs (Alpha, Beta, Delta, Gamma and Omicron) between PWH and HIV-uninfected individuals in serum and NLF (HIV-, n = 41, HIV+, n = 46). Box plots show the interquartile range (25th–75th percentiles), with the median indicated by the centre line. Whiskers extend to values within 1.5× the interquartile range, and points beyond the whiskers denote outliers. Data in panel **a** was log₁₀-transformed for statistical analysis and visualisation. Statistical significance was assessed using two-sided Wilcoxon rank-sum tests; p \< 0.05 was considered significant. p values were adjusted for multiple comparisons within each figure panel using the Benjamini-Hochberg false discovery rate (FDR) method.
+SARS-CoV-2 Spike–specific IgG and IgA binding antibody titres and ACE2–Spike binding inhibition activity were compared between PWH and HIV-uninfected individuals in serum, nasal lining fluid (NLF) and bronchoalveolar lavage (BAL) samples against wildtype, Alpha, Beta, Delta, Gamma and Omicron variants. Antibody titres were quantified using a multiplex MSD assay, and ACE2–Spike binding inhibition was measured using a surrogate neutralisation assay. **a,** Box plots comparing SARS-CoV-2 WT Spike-, RBD- and Nucleocapsid–specific IgA antibody concentrations between PWH and HIV-uninfected individuals. Results are expressed as WHO binding antibody units (BAU ml⁻¹), across systemic and mucosal compartments (HIV-, n = 43, HIV+, n = 45). **b,** Box plots comparing SARS-CoV-2 WT Spike-, RBD- and Nucleocapsid–specific IgG antibody concentrations between PWH and HIV-uninfected individuals. Results are expressed as WHO binding antibody units (BAU ml⁻¹), across systemic and mucosal compartments (HIV-, n = 43, HIV+, n = 45). **c**, Box plots comparing ACE2–Spike binding inhibition activity (%) against wildtype and VOCs (Alpha, Beta, Delta, Gamma and Omicron) between PWH and HIV-uninfected individuals in serum and NLF (HIV-, n = 43, HIV+, n = 44). Box plots show the interquartile range (25th–75th percentiles), with the median indicated by the centre line. Whiskers extend to values within 1.5× the interquartile range, and points beyond the whiskers denote outliers. Data in panel **a** was log₁₀-transformed for statistical analysis and visualisation. Statistical significance was assessed using two-sided Wilcoxon rank-sum tests; p \< 0.05 was considered significant. p values were adjusted for multiple comparisons within each figure panel using the Benjamini-Hochberg false discovery rate (FDR) method.
 
 Fig. 2A (WT IgA): serum HIV− n=`r n_fig2a_wt_serum_hivneg`, HIV+ n=`r n_fig2a_wt_serum_hivpos`; BAL HIV− n=`r n_fig2a_wt_bal_hivneg`, HIV+ n=`r n_fig2a_wt_bal_hivpos`; NLF HIV− n=`r n_fig2a_wt_nlf_hivneg`, HIV+ n=`r n_fig2a_wt_nlf_hivpos`.
 
@@ -1188,6 +1186,11 @@ Fig3A <- ggplot(plot_data4, aes(x = Compartment, y = Log_CD4Total, fill = Compar
     legend.position = "none"
   )
 
+plot_data3A <- plot_data4 %>%
+  select(PID, Stimulant, Compartment, Log_CD4Total)
+write_csv(plot_data3A, "Fig3A_data.csv")
+
+
 Fig3A
 plot_data4 %>%
   group_by(Stimulant, Compartment) %>%
@@ -1291,6 +1294,10 @@ Fig3B <- ggplot(plot_data8, aes(x = Compartment, y = Log_CD8Total, fill = Compar
     panel.grid.minor = element_line(color = "grey85", linewidth = 0.08),
     legend.position = "none"
   )
+
+plot_data3B <- plot_data8 %>%
+  select(PID, Stimulant, Compartment, Log_CD8Total)
+write_csv(plot_data3B, "Fig3B_data.csv")
 
 Fig3B
 plot_data8 %>%
@@ -1467,6 +1474,9 @@ Fig3C <- ggplot(corr_long, aes(var1, var2, fill = r)) +
     panel.grid.minor = element_line(color = "grey85", linewidth = .08)
   )
 
+plot_data3C <- corr_long %>%
+  select(Stimulant, Compartment, var1, var2, r, p)
+write_csv(plot_data3C, "Fig3C_data.csv")
 
 strip_margins <- theme(plot.margin = margin(0,0,0,0))
 
@@ -1552,7 +1562,7 @@ n_fig3c_np_pb     <- fig3c_n$n[fig3c_n$Stimulant == "WT Nucleocapsid" & fig3c_n$
 
 **Figure 3 \| Detection of SARS-CoV-2–specific T cell responses in systemic and mucosal compartments.**
 
-Bronchoalveolar cells (BAL) and peripheral blood (PB) collected from HIV-uninfected individuals were stained with fluorochrome-conjugated antibodies to identify IFN-γ and TNF-α producing CD4⁺ and CD8⁺ T cells following stimulation with SARS-Cov2 peptides (WT-spike and Nucleocapsid) and Phorbol 12-myristate 13-acetate and Ionomycin (PMA and Ionomycin). **a,** Representative flow cytometry plots. **b,c** Box plots comparing **b,** CD4⁺ and **c,** CD8⁺ T cell responses between BAL and PB following stimulation with PMA/ionomycin (BAL, n=32; PB, n=41), SARS-CoV-2 WT Spike (BAL, n=32; PB, n=41), and Nucleocapsid (BAL, n=30; PB, n=37) peptide pools. **d,** Correlograms depicting the relationships between SARS-CoV-2 WT Spike- and Nucleocapsid-specific CD4⁺ and CD8⁺ T cell responses, along with IgG and IgA binding antibody titers (BAL Spike, n=26; Nucleocapsid, n=24 and PB Spike, n=35; Nucleocapsid, n=31). Numeric values indicate Spearman’s correlation coefficients (r). Asterisks denote statistical significance (\*p ≤ 0.05, \*\*p ≤ 0.01, \*\*\*p ≤ 0.001). Data were log₁₀-transformed for statistical analysis and visualisation. Box plots represent the interquartile range (25th–75th percentiles), with the median indicated by the centre line. Whiskers extend to values within 1.5× the interquartile range, and points beyond the whiskers denote outliers. Statistical significance was assessed using two-sided Wilcoxon rank-sum tests (**b, c**) and Spearman’s rank correlation tests (**d**); p \< 0.05 was considered significant.
+Bronchoalveolar lavage cells (BAL) and peripheral blood (PB) cells collected from HIV-uninfected individuals were stained with fluorochrome-conjugated antibodies to identify total IFN-γ and TNF-α-producing CD4⁺ and CD8⁺ T cells following stimulation with SARS-CoV-2 overlapping peptides (WT-spike and Nucleocapsid) and Phorbol 12-myristate 13-acetate and Ionomycin (PMA and Ionomycin). **a,b** Box plots comparing **a,** CD4⁺ and **b,** CD8⁺ T cell responses between BAL and PB following stimulation with PMA/ionomycin (BAL, n = 32; PB, n = 41), SARS-CoV-2 WT Spike (BAL, n = 32; PB, n = 41), and Nucleocapsid (BAL, n = 30; PB, n = 37) peptide pools. **c,** Correlograms depicting the relationships between SARS-CoV-2 WT Spike- and Nucleocapsid-specific CD4⁺ and CD8⁺ T cell responses, along with IgG and IgA binding antibody titers (BAL Spike, n = 27; Nucleocapsid, n = 25 and PB Spike, n = 36; Nucleocapsid, n = 32). Numeric values indicate Spearman’s correlation coefficients (r). Asterisks denote statistical significance (\*p ≤ 0.05, \*\*p ≤ 0.01, \*\*\*p ≤ 0.001). Data were log₁₀-transformed for statistical analysis and visualisation. Box plots represent the interquartile range (25th–75th percentiles), with the median indicated by the centre line. Whiskers extend to values within 1.5× the interquartile range, and points beyond the whiskers denote outliers. Statistical significance was assessed using two-sided Wilcoxon rank-sum tests (**a, b**) and Spearman’s rank correlation tests (**c**); p \< 0.05 was considered significant.
 
 Fig. 3A (CD4): PMA & Ionomycin BAL n=`r n_fig3a_pma_bal`, PB n=`r n_fig3a_pma_pb`; WT Spike BAL n=`r n_fig3a_spike_bal`, PB n=`r n_fig3a_spike_pb`; WT Nucleocapsid BAL n=`r n_fig3a_np_bal`, PB n=`r n_fig3a_np_pb`.
 
@@ -1634,6 +1644,9 @@ Fig4A <- ggplot(plot_data4b, aes(x = HIV_status, y = Log_CD4Total, fill = Compar
     legend.position = "none"
   )
 
+plot_data4A <- plot_data4b %>%
+  select(PID, HIV_status, Compartment, Stimulant, Log_CD4Total)
+write_csv(plot_data4A, "Fig4A_data.csv")
 
 # Figure 4B
 plot_data8b <- CD8LCdf_1 %>%
@@ -1705,6 +1718,9 @@ Fig4B <- ggplot(plot_data8b, aes(x = HIV_status, y = Log_CD8Total, fill = Compar
     legend.position = "none"
   )
 
+plot_data4B <- plot_data8b %>%
+  select(PID, HIV_status, Compartment, Stimulant, Log_CD8Total)
+write_csv(plot_data4B, "Fig4B_data.csv")
 
 # Figure 4C
 plot_data4c <- CD4LCdf_1 %>%
@@ -1774,6 +1790,9 @@ Fig4C <- ggplot(plot_data4c, aes(x = PB, y = BAL, colour = HIV_status)) +
     panel.grid.minor = element_line()
   )
 
+plot_data4C <- plot_data4c %>%
+  select(PID, HIV_status, PB, BAL, Stimulant)
+write_csv(plot_data4C, "Fig4C_data.csv")
 
 # Figure 4D
 plot_data8d <- CD8LCdf_1 %>%
@@ -1843,10 +1862,9 @@ Fig4D <- ggplot(plot_data8d, aes(x = PB, y = BAL, colour = HIV_status)) +
     panel.grid.minor = element_line ()
   )
 
-
-
-
-
+plot_data4D <- plot_data8d %>%
+  select(PID, HIV_status, PB, BAL, Stimulant)
+write_csv(plot_data4D, "Fig4D_data.csv")
 
 
 strip_margins <- theme(plot.margin = margin(0,0,0,0))
@@ -1897,7 +1915,7 @@ write_csv(plot_data8bB, "Fig4B_data.csv")
 
 **Figure 4 \| Comparable SARS-CoV-2–specific T cell responses between ART-treated people with HIV (PWH) and HIV-uninfected individuals across systemic and mucosal compartments.**
 
-SARS-CoV-2–specific CD4⁺ and CD8⁺ T cell responses from vaccinated and unvaccinated adults were compared between PWH and HIV-uninfected individuals in bronchoalveolar lavage and peripheral blood samples. **a,b,** Box plots comparing **a,** CD4⁺ and **b,** CD8⁺ T cell responses between PWH and HIV-uninfected adults following stimulation with PMA/ionomycin, SARS-CoV-2 WT Spike, and Nucleocapsid peptide pools in BAL and PB of vaccinated and unvaccinated individuals (HIV-, n=32; HIV+, n=17). **c, d** Correlation plots showing the relationship between peripheral blood (PB) and bronchoalveolar lavage (BAL) SARS-CoV-2 wildtype (WT) spike– and WT nucleocapsid–specific CD4^+^ and CD8^+^ T cell responses (n=48). Box plots represent the interquartile range (25th–75th percentiles), with the median indicated by the centre line. Whiskers extend to values within 1.5× the interquartile range, and points beyond the whiskers denote outliers. Data in panels **a–b** were log₁₀-transformed for statistical analysis and visualisation. Statistical significance was assessed using two-sided Wilcoxon rank-sum tests (**a,b**) and Spearman’s rank correlation tests (**c,d**); P \< 0.05 was considered significant.
+SARS-CoV-2–specific CD4⁺ and CD8⁺ T cell responses were compared between PWH and HIV-uninfected individuals in bronchoalveolar lavage and peripheral blood samples. **a,b,** Box plots comparing **a,** CD4⁺ and **b,** CD8⁺ T cell responses between PWH and HIV-uninfected adults following stimulation with PMA/ionomycin, SARS-CoV-2 WT Spike, and Nucleocapsid peptide pools in bronchoalveolar lavage (BAL) and peripheral blood (PB) (HIV-, n = 32; HIV+, n = 17). **c,** Correlation plots showing the relationship between BAL and PB SARS-CoV-2 wildtype (WT) spike– and WT nucleocapsid–specific CD4^+^ and CD8^+^ T cell responses (n = 48). Box plots represent the interquartile range (25th–75th percentiles), with the median indicated by the centre line. Whiskers extend to values within 1.5× the interquartile range, and points beyond the whiskers denote outliers. Data in panels **a–b** were log₁₀-transformed for statistical analysis and visualisation. Statistical significance was assessed using two-sided Wilcoxon rank-sum tests (**a,b**) and Spearman’s rank correlation tests (c); P \< 0.05 was considered significant.
 
 Fig. 4A: WT Spike BAL HIV− (n=`r fig4a_n$n[fig4a_n$Stimulant=="WT Spike" & fig4a_n$Compartment=="BAL" & fig4a_n$HIV_status=="HIV-"]`), HIV+ (n=`r fig4a_n$n[fig4a_n$Stimulant=="WT Spike" & fig4a_n$Compartment=="BAL" & fig4a_n$HIV_status=="HIV+"]`).
 
@@ -1919,7 +1937,7 @@ To further characterise compartmental divergence, we performed phenotypic profil
 
 **Figure 5 \| Phenotypic profiles of SARS-CoV-2–specific T cells across systemic and mucosal compartments.**
 
-Scatter plots, bar graphs and heatmaps showing the distribution of WT SARS-CoV-2 Spike- and Nucleocapsid-specific CD4⁺ and CD8⁺ T cells in bronchoalveolar lavage samples, pooled across HIV and vaccination status. **a,** WT SARS-CoV-2 Nucleocapsid and Spike-specific CD4⁺ T cells (S BAL n = 55, PB n = 65; NP BAL n = 54, PB n = 61). **b,** WT SARS-CoV-2 Nucleocapsid and Spike-specific CD8⁺ T cells (S BAL n = 55, PB n = 65; NP BAL n = 54, PB n = 61). Asterisks denote statistical significance (\*p ≤ 0.05, \*\*p ≤ 0.01, \*\*\*p ≤ 0.001). Data are presented as median and interquartile range (IQR), with the bar denoting median. The heatmap denotes the contribution of each specific marker combination to the total response. Statistical analyses were performed using two-sided Wilcoxon rank-sum tests and Spearman’s rank correlation tests; P \< 0.05 was considered significant.
+Scatter plots, bar graphs and heatmaps showing the distribution of WT SARS-CoV-2 Spike- and Nucleocapsid-specific CD4⁺ and CD8⁺ T cells in bronchoalveolar lavage samples, pooled across HIV and vaccination status. **a,** WT SARS-CoV-2 Nucleocapsid and Spike-specific CD4⁺ T cells (S BAL n = 55, PB n = 65; NP BAL n = 54, PB n = 61). **b,** WT SARS-CoV-2 Nucleocapsid and Spike-specific CD8⁺ T cells (S BAL n = 55, PB n = 65; NP BAL n = 54, PB n = 61). Asterisks denote statistical significance (\*p ≤ 0.05, \*\*p ≤ 0.01, \*\*\*p ≤ 0.001). Data are presented as median and interquartile range (IQR), with the bar denoting the median. The heatmap denotes the contribution of each specific marker combination to the total response. Statistical analyses were performed using two-sided Wilcoxon rank-sum tests and Spearman’s rank correlation tests; P \< 0.05 was considered significant.
 
 Spike, PB n=65, BAL n =55; NP, PB n=61, BAL n =54; PMA/Ionomycin, PB n=65, BAL n =55
 
@@ -1933,7 +1951,7 @@ Antibody-mediated neutralisation is a key mechanism of protection against SARS-C
 #| echo: false
 
 # Build long dataset
-Neut_combined3 <- lungcovid %>%
+Neut_combined3 <- lungcovid_corrected %>%
   select(
     Sample_ID, Antigens, Vacc_Status, HIV_Status, Sex, Age,
     IgALogNasosorption, IgALogSerum, IgALogBAL,
@@ -2127,21 +2145,21 @@ final_gt <- table_all %>%
     style = cell_text(weight = "bold"),
     locations = cells_body(
       columns = c(NLF, p_NLF),
-      rows = p_NLF %in% c("<0.001", "0.009", "0.039", "0.048")
+      rows = as.numeric(sub("<", "", p_NLF)) < 0.05
     )
   ) %>%
   tab_style(
     style = cell_text(weight = "bold"),
     locations = cells_body(
       columns = c(Serum, p_Serum),
-      rows = p_Serum %in% c("<0.001")
+      rows = as.numeric(sub("<", "", p_Serum)) < 0.05
     )
   ) %>%
   tab_style(
     style = cell_text(weight = "bold"),
     locations = cells_body(
       columns = c(BAL, p_BAL),
-      rows = p_BAL %in% c("<0.001", "0.037", "0.039")
+      rows = as.numeric(sub("<", "", p_BAL)) < 0.05
     )
   ) %>%
   tab_source_note(
