@@ -1,0 +1,33 @@
+# R / RStudio
+.Rhistory
+.RData
+.Ruserdata
+.Rproj.user/
+
+# macOS
+.DS_Store
+
+# Quarto generated files
+.quarto/
+*_files/
+
+# Research data
+data/
+Data/
+raw_data/
+RawData/
+
+# Data files
+*.csv
+*.xlsx
+*.xls
+*.sav
+*.dta
+
+# Temporary files
+*.tmp
+~$*
+
+# Quarto rendered output/cache
+Lungcovid2026.html
+Lungcovid2026_cache/
